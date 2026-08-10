@@ -1,1 +1,77 @@
 # FinGraph
+
+FinGraph is a streaming graph-analytics foundation for investigating money
+laundering syndicates. It models people, accounts, banks, and transfers as a
+connected Neo4j graph so that analysts can investigate patterns that isolated
+transaction rules miss.
+
+## Week 1: ingestion and graph foundation
+
+The initial delivery contains:
+
+- a deterministic Python simulator that creates ordinary transactions and a
+  nested `starburst` syndicate: many unrelated accounts send sub-threshold
+  transfers through intermediaries to an offshore shell account;
+- a Kafka publisher for the versioned `fingraph.transactions.v1` topic;
+- a Docker Compose development stack for Kafka and Neo4j; and
+- Neo4j constraints, indexes, and an idempotent transaction-upsert query.
+
+## Local setup
+
+1. Copy `.env.example` to `.env` and adjust credentials if needed.
+2. Create a virtual environment and install the package:
+
+   ```powershell
+   python -m venv .venv
+   .\.venv\Scripts\Activate.ps1
+   pip install -e ".[dev]"
+   ```
+
+3. Start Kafka and Neo4j:
+
+   ```powershell
+   docker compose up -d
+   ```
+
+4. Apply the graph constraints and indexes in Neo4j Browser at
+   `http://localhost:7474`, using the contents of `neo4j/schema.cypher`.
+
+## Generate and inspect transaction events
+
+Run a deterministic dry run first. It writes JSON Lines that can be inspected
+or replayed later without needing Kafka:
+
+```powershell
+fingraph-sim generate --seed 42 --normal-transactions 20 --syndicate-sources 50 --intermediaries 5 --output data/transactions.jsonl
+```
+
+Publish the same shaped data to Kafka when the local stack is running:
+
+```powershell
+fingraph-sim publish --seed 42 --normal-transactions 20 --syndicate-sources 50 --intermediaries 5
+```
+
+The publisher creates the topic automatically when Kafka is configured to
+allow topic auto-creation. Every event has a stable transaction ID, source and
+destination account metadata, ISO-8601 timestamp, origin IP, and syndicate
+risk indicators. `neo4j/upsert_transaction.cypher` specifies the idempotent
+graph write that the Week 2 Flink consumer will call.
+
+## Verification
+
+```powershell
+$env:PYTHONPATH = "src"
+python -m unittest discover -s tests -v
+```
+
+The tests check that the starburst contains distinct source accounts and IPs,
+that its transfers remain below the common USD 10,000 threshold, and that
+Kafka event payloads are valid JSON.
+
+## Planned milestones
+
+- **Week 2:** Flink consumer, transaction cleaning, Neo4j real-time upserts,
+  and multi-hop Cypher risk queries.
+- **Week 3:** Neo4j Graph Data Science community and centrality scoring plus
+  dashboard integration.
+- **Week 4:** alert automation and investigation-dashboard refinement.

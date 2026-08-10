@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fingraph"
+version = "0.1.0"
+description = "Streaming graph analytics foundation for financial-crime investigations."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "kafka-python-ng>=2.2.3",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+]
+
+[project.scripts]
+fingraph-sim = "fingraph.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
