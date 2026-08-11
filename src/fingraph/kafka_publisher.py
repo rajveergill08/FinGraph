@@ -7,6 +7,8 @@ import json
 import os
 from typing import Iterable, Protocol
 
+from .kafka_topic import KafkaTopicProvisioner
+
 
 class KafkaPublishError(RuntimeError):
     """Raised when the configured Kafka client cannot publish an event batch."""
@@ -25,14 +27,37 @@ class KafkaSettings:
     bootstrap_servers: str = "localhost:9092"
     transaction_topic: str = "fingraph.transactions.v1"
     client_id: str = "fingraph-simulator"
+    transaction_topic_partitions: int = 3
+    transaction_topic_replication_factor: int = 1
 
     @classmethod
     def from_environment(cls) -> "KafkaSettings":
+        defaults = cls()
         return cls(
-            bootstrap_servers=os.getenv("KAFKA_BOOTSTRAP_SERVERS", cls.bootstrap_servers),
-            transaction_topic=os.getenv("KAFKA_TRANSACTION_TOPIC", cls.transaction_topic),
-            client_id=os.getenv("KAFKA_CLIENT_ID", cls.client_id),
+            bootstrap_servers=os.getenv("KAFKA_BOOTSTRAP_SERVERS", defaults.bootstrap_servers),
+            transaction_topic=os.getenv("KAFKA_TRANSACTION_TOPIC", defaults.transaction_topic),
+            client_id=os.getenv("KAFKA_CLIENT_ID", defaults.client_id),
+            transaction_topic_partitions=_positive_integer_from_environment(
+                "KAFKA_TRANSACTION_TOPIC_PARTITIONS", defaults.transaction_topic_partitions
+            ),
+            transaction_topic_replication_factor=_positive_integer_from_environment(
+                "KAFKA_TRANSACTION_TOPIC_REPLICATION_FACTOR",
+                defaults.transaction_topic_replication_factor,
+            ),
         )
+
+
+def _positive_integer_from_environment(name: str, default: int) -> int:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a positive integer.") from exc
+    if parsed < 1:
+        raise ValueError(f"{name} must be a positive integer.")
+    return parsed
 
 
 class KafkaTransactionPublisher:
@@ -43,12 +68,15 @@ class KafkaTransactionPublisher:
         settings: KafkaSettings | None = None,
         *,
         producer: ProducerProtocol | None = None,
+        topic_provisioner: KafkaTopicProvisioner | None = None,
     ) -> None:
         self.settings = settings or KafkaSettings.from_environment()
         self._producer = producer
         self._owns_producer = producer is None
+        self._topic_provisioner = topic_provisioner
 
     def publish(self, events: Iterable[dict[str, object]]) -> int:
+        self._ensure_topic()
         producer = self._get_producer()
         published = 0
         try:
@@ -102,3 +130,13 @@ class KafkaTransactionPublisher:
                 f"Kafka is not reachable at {self.settings.bootstrap_servers}."
             ) from exc
         return self._producer
+
+    def _ensure_topic(self) -> None:
+        provisioner = self._topic_provisioner or KafkaTopicProvisioner(
+            bootstrap_servers=self.settings.bootstrap_servers,
+            topic=self.settings.transaction_topic,
+            partitions=self.settings.transaction_topic_partitions,
+            replication_factor=self.settings.transaction_topic_replication_factor,
+            client_id=self.settings.client_id,
+        )
+        provisioner.ensure_topic()

@@ -33,7 +33,20 @@ The initial delivery contains:
    docker compose up -d
    ```
 
-4. Apply the graph constraints and indexes in Neo4j Browser at
+   Kafka exposes its host-facing listener on port `9092` by default and keeps
+   its Docker-network listener on `kafka:9092` for the later Flink job. If the
+   host port is already used, set both `KAFKA_HOST_PORT` and
+   `KAFKA_BOOTSTRAP_SERVERS` in `.env` to the same alternate host port before
+   starting the stack.
+
+4. Explicitly provision the three-partition Kafka topic. This avoids relying
+   on topic auto-creation, which is disabled in the local stack:
+
+   ```powershell
+   fingraph-sim provision
+   ```
+
+5. Apply the graph constraints and indexes in Neo4j Browser at
    `http://localhost:7474`, using the contents of `neo4j/schema.cypher`.
 
 ## Generate and inspect transaction events
@@ -51,11 +64,11 @@ Publish the same shaped data to Kafka when the local stack is running:
 fingraph-sim publish --seed 42 --normal-transactions 20 --syndicate-sources 50 --intermediaries 5
 ```
 
-The publisher creates the topic automatically when Kafka is configured to
-allow topic auto-creation. Every event has a stable transaction ID, source and
-destination account metadata, ISO-8601 timestamp, origin IP, and syndicate
-risk indicators. `neo4j/upsert_transaction.cypher` specifies the idempotent
-graph write that the Week 2 Flink consumer will call.
+The publisher provisions the topic idempotently before sending events. Every
+event has a stable transaction ID, source and destination account metadata,
+ISO-8601 timestamp, origin IP, and syndicate risk indicators.
+`neo4j/upsert_transaction.cypher` specifies the idempotent graph write that
+the Week 2 Flink consumer will call.
 
 ## Verification
 

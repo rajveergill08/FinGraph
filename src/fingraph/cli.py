@@ -8,7 +8,8 @@ import json
 from pathlib import Path
 from typing import Sequence
 
-from .kafka_publisher import KafkaPublishError, KafkaTransactionPublisher
+from .kafka_publisher import KafkaPublishError, KafkaSettings, KafkaTransactionPublisher
+from .kafka_topic import KafkaTopicError, KafkaTopicProvisioner
 from .simulator import TransactionNetworkSimulator
 
 
@@ -20,6 +21,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     generate = subparsers.add_parser("generate", help="Write generated events as JSON Lines.")
     publish = subparsers.add_parser("publish", help="Generate and publish events to Kafka.")
+    subparsers.add_parser("provision", help="Create the FinGraph Kafka topic if it is missing.")
     for command in (generate, publish):
         command.add_argument("--seed", type=int, default=42, help="Seed for repeatable data.")
         command.add_argument(
@@ -73,6 +75,24 @@ def _fixture_from_args(args: argparse.Namespace):
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    if args.command == "provision":
+        try:
+            result = _topic_provisioner().ensure_topic()
+        except KafkaTopicError as exc:
+            parser.error(str(exc))
+        print(
+            json.dumps(
+                {
+                    "status": "created" if result.created else "already_exists",
+                    "topic": result.topic,
+                    "partitions": result.partitions,
+                    "replication_factor": result.replication_factor,
+                }
+            )
+        )
+        return 0
+
     fixture = _fixture_from_args(args)
 
     if args.command == "generate":
@@ -90,6 +110,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error(str(exc))
     print(json.dumps({"status": "published", "published_events": published, **fixture.summary()}))
     return 0
+
+
+def _topic_provisioner() -> KafkaTopicProvisioner:
+    settings = KafkaSettings.from_environment()
+    return KafkaTopicProvisioner(
+        bootstrap_servers=settings.bootstrap_servers,
+        topic=settings.transaction_topic,
+        partitions=settings.transaction_topic_partitions,
+        replication_factor=settings.transaction_topic_replication_factor,
+        client_id=settings.client_id,
+    )
 
 
 if __name__ == "__main__":
