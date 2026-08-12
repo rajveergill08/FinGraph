@@ -70,6 +70,15 @@ ISO-8601 timestamp, origin IP, and syndicate risk indicators.
 `neo4j/upsert_transaction.cypher` specifies the idempotent graph write that
 the Week 2 Flink consumer will call.
 
+### Stream-contract validation
+
+Before events enter the graph-writing flow, the Week 2 stream processor uses
+`normalise_transaction_event` to reject malformed identities, account-map
+mismatches, invalid IPs, unsupported channels, non-ISO currencies, money with
+more than two decimal places, and timestamps without a timezone. It also
+canonicalises countries, currency, channel, risk indicators, and timestamps
+to UTC. Invalid records must go to a dead-letter path rather than be upserted.
+
 ## Verification
 
 ```powershell
