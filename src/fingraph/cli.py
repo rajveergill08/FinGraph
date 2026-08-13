@@ -6,6 +6,7 @@ import argparse
 from datetime import datetime
 import json
 from pathlib import Path
+import os
 from typing import Sequence
 
 from .kafka_publisher import KafkaPublishError, KafkaSettings, KafkaTransactionPublisher
@@ -21,7 +22,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     generate = subparsers.add_parser("generate", help="Write generated events as JSON Lines.")
     publish = subparsers.add_parser("publish", help="Generate and publish events to Kafka.")
-    subparsers.add_parser("provision", help="Create the FinGraph Kafka topic if it is missing.")
+    subparsers.add_parser("provision", help="Create the FinGraph Kafka topics if missing.")
     for command in (generate, publish):
         command.add_argument("--seed", type=int, default=42, help="Seed for repeatable data.")
         command.add_argument(
@@ -78,16 +79,22 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "provision":
         try:
-            result = _topic_provisioner().ensure_topic()
+            results = [provisioner.ensure_topic() for provisioner in _topic_provisioners()]
         except KafkaTopicError as exc:
             parser.error(str(exc))
         print(
             json.dumps(
                 {
-                    "status": "created" if result.created else "already_exists",
-                    "topic": result.topic,
-                    "partitions": result.partitions,
-                    "replication_factor": result.replication_factor,
+                    "status": "provisioned",
+                    "topics": [
+                        {
+                            "status": "created" if result.created else "already_exists",
+                            "topic": result.topic,
+                            "partitions": result.partitions,
+                            "replication_factor": result.replication_factor,
+                        }
+                        for result in results
+                    ],
                 }
             )
         )
@@ -113,14 +120,25 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 def _topic_provisioner() -> KafkaTopicProvisioner:
+    return _topic_provisioners()[0]
+
+
+def _topic_provisioners() -> list[KafkaTopicProvisioner]:
     settings = KafkaSettings.from_environment()
-    return KafkaTopicProvisioner(
-        bootstrap_servers=settings.bootstrap_servers,
-        topic=settings.transaction_topic,
-        partitions=settings.transaction_topic_partitions,
-        replication_factor=settings.transaction_topic_replication_factor,
-        client_id=settings.client_id,
-    )
+    topics = [
+        settings.transaction_topic,
+        os.getenv("KAFKA_DEAD_LETTER_TOPIC", "fingraph.transactions.dlq.v1"),
+    ]
+    return [
+        KafkaTopicProvisioner(
+            bootstrap_servers=settings.bootstrap_servers,
+            topic=topic,
+            partitions=settings.transaction_topic_partitions,
+            replication_factor=settings.transaction_topic_replication_factor,
+            client_id=settings.client_id,
+        )
+        for topic in dict.fromkeys(topics)
+    ]
 
 
 if __name__ == "__main__":

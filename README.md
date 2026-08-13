@@ -39,8 +39,9 @@ The initial delivery contains:
    `KAFKA_BOOTSTRAP_SERVERS` in `.env` to the same alternate host port before
    starting the stack.
 
-4. Explicitly provision the three-partition Kafka topic. This avoids relying
-   on topic auto-creation, which is disabled in the local stack:
+4. Explicitly provision the three-partition transaction and dead-letter
+   Kafka topics. This avoids relying on topic auto-creation, which is disabled
+   in the local stack:
 
    ```powershell
    fingraph-sim provision
@@ -69,6 +70,23 @@ event has a stable transaction ID, source and destination account metadata,
 ISO-8601 timestamp, origin IP, and syndicate risk indicators.
 `neo4j/upsert_transaction.cypher` specifies the idempotent graph write that
 the Week 2 Flink consumer will call.
+
+## Run the Week 2 stream consumer
+
+Install the streaming extras, ensure Kafka and Neo4j are running, and apply
+`neo4j/schema.cypher` once before starting the job:
+
+```powershell
+pip install -e ".[streaming]"
+fingraph-stream
+```
+
+The PyFlink job resumes from committed offsets for consumer group
+`fingraph-neo4j-v1`. Valid events are canonicalised and written with the
+idempotent `neo4j/upsert_transaction.cypher` query. Invalid JSON or contract
+violations are published to `fingraph.transactions.dlq.v1` with the original
+value and validation error. Configure topic names, the consumer group, and
+Neo4j connection through `.env.example`'s environment variables.
 
 ### Stream-contract validation
 

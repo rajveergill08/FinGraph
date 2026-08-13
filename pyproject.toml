@@ -16,9 +16,14 @@ dependencies = [
 dev = [
   "pytest>=8.0",
 ]
+streaming = [
+  "apache-flink>=1.20,<2",
+  "neo4j>=5.23,<6",
+]
 
 [project.scripts]
 fingraph-sim = "fingraph.cli:main"
+fingraph-stream = "fingraph.flink_consumer:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
