@@ -24,6 +24,7 @@ streaming = [
 [project.scripts]
 fingraph-sim = "fingraph.cli:main"
 fingraph-stream = "fingraph.flink_consumer:main"
+fingraph-analytics = "fingraph.graph_analytics:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

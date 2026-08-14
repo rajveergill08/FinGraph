@@ -97,6 +97,24 @@ more than two decimal places, and timestamps without a timezone. It also
 canonicalises countries, currency, channel, risk indicators, and timestamps
 to UTC. Invalid records must go to a dead-letter path rather than be upserted.
 
+### Circular-flow detection and account risk scores
+
+Run the Week 2 graph analytics after transactions have reached Neo4j:
+
+```powershell
+fingraph-analytics --lookback-hours 24 --minimum-amount 100 `
+  --high-risk-country KY --high-risk-country IR
+```
+
+`neo4j/detect_circular_flows.cypher` finds time-ordered three-account loops
+such as `A -> B -> C -> A`, anchors each directed loop by its lowest account
+ID to avoid rotational duplicates, and bounds both its time window and result
+count. `neo4j/refresh_account_risk_scores.cypher` writes a capped, explainable
+0-100 score to every account using its configured risk tier, country,
+counterparty breadth, recent transfer volume, and transaction risk indicators.
+The score components are returned for analyst review; Week 3 GDS algorithms
+will enrich rather than replace this rules-based baseline.
+
 ## Verification
 
 ```powershell
@@ -104,9 +122,9 @@ $env:PYTHONPATH = "src"
 python -m unittest discover -s tests -v
 ```
 
-The tests check that the starburst contains distinct source accounts and IPs,
-that its transfers remain below the common USD 10,000 threshold, and that
-Kafka event payloads are valid JSON.
+The tests check simulator integrity, Kafka provisioning and payloads, stream
+validation, Neo4j upsert boundaries, circular-flow query safeguards, and risk
+score parameter handling.
 
 ## Planned milestones
 

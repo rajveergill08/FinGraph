@@ -18,5 +18,8 @@ FOR (account:Account) ON (account.country);
 CREATE INDEX account_risk_tier IF NOT EXISTS
 FOR (account:Account) ON (account.risk_tier);
 
+CREATE INDEX account_graph_risk_score IF NOT EXISTS
+FOR (account:Account) ON (account.graph_risk_score);
+
 CREATE INDEX transfer_occurred_at IF NOT EXISTS
 FOR ()-[transfer:TRANSFERRED_TO]-() ON (transfer.occurred_at);
