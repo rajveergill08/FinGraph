@@ -1,0 +1,13 @@
+.git
+.venv
+.env
+.flink
+.docker-cache
+__pycache__
+*.py[cod]
+.pytest_cache
+data
+tmp
+dist
+build
+*.egg-info

@@ -10,3 +10,5 @@ build/
 .env
 data/
 tmp/
+.flink/
+.docker-cache/

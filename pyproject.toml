@@ -10,6 +10,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
   "kafka-python-ng>=2.2.3",
+  "neo4j>=5.23,<6",
 ]
 
 [project.optional-dependencies]
@@ -17,14 +18,15 @@ dev = [
   "pytest>=8.0",
 ]
 streaming = [
-  "apache-flink>=1.20,<2",
-  "neo4j>=5.23,<6",
+  "apache-flink==1.20.5",
+  "setuptools<81",
 ]
 
 [project.scripts]
 fingraph-sim = "fingraph.cli:main"
 fingraph-stream = "fingraph.flink_consumer:main"
 fingraph-analytics = "fingraph.graph_analytics:main"
+fingraph-audit = "fingraph.pipeline_audit:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

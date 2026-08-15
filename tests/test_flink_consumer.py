@@ -1,10 +1,13 @@
 import json
+from pathlib import Path
+import tempfile
 import unittest
 from unittest.mock import Mock
 
 from fingraph.flink_consumer import (
     Neo4jTransactionWriter,
     StreamSettings,
+    _connector_jar_uri,
     dead_letter_record,
     decode_and_normalise,
 )
@@ -52,6 +55,18 @@ class FlinkConsumerTests(unittest.TestCase):
             settings = StreamSettings.from_environment()
             self.assertEqual(settings.consumer_group, "test-group")
             self.assertEqual(settings.kafka_bootstrap_servers, "localhost:9092")
+            self.assertEqual(settings.python_execution_mode, "process")
+            self.assertEqual(settings.parallelism, 1)
+            self.assertEqual(settings.python_bundle_size, 50)
+            self.assertEqual(settings.python_bundle_time_ms, 50)
+
+    def test_connector_jar_must_be_configured_and_exist(self):
+        with self.assertRaisesRegex(RuntimeError, "FLINK_KAFKA_CONNECTOR_JAR"):
+            _connector_jar_uri(None)
+        with tempfile.TemporaryDirectory() as directory:
+            jar = Path(directory) / "connector.jar"
+            jar.touch()
+            self.assertEqual(_connector_jar_uri(str(jar)), jar.resolve().as_uri())
 
     def test_writer_executes_idempotent_query_with_event_parameter(self):
         writer = Neo4jTransactionWriter("bolt://test", "neo4j", "secret", "MERGE ($event)")

@@ -73,11 +73,28 @@ the Week 2 Flink consumer will call.
 
 ## Run the Week 2 stream consumer
 
-Install the streaming extras, ensure Kafka and Neo4j are running, and apply
-`neo4j/schema.cypher` once before starting the job:
+The supported local path runs PyFlink in Docker so Java, the Python worker,
+and the version-matched Flink Kafka connector are reproducible on Windows.
+Start the data services, provision the topics, apply the schema, and then
+start the consumer:
 
 ```powershell
-pip install -e ".[streaming]"
+docker compose up -d kafka neo4j
+fingraph-sim provision
+Get-Content .\neo4j\schema.cypher | docker compose exec -T neo4j `
+  cypher-shell -u neo4j -p change-me-now
+docker compose --profile streaming up --build -d stream-processor
+docker compose logs --follow stream-processor
+```
+
+The first build downloads PyFlink and OpenJDK; later builds reuse Docker's
+cache. The image verifies the pinned Kafka connector JAR checksum during the
+build. For an advanced non-Docker Flink installation, download the same
+connector to the ignored `.flink` directory before starting the job:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass `
+  -File .\scripts\install_flink_connector.ps1
 fingraph-stream
 ```
 
@@ -87,6 +104,21 @@ idempotent `neo4j/upsert_transaction.cypher` query. Invalid JSON or contract
 violations are published to `fingraph.transactions.dlq.v1` with the original
 value and validation error. Configure topic names, the consumer group, and
 Neo4j connection through `.env.example`'s environment variables.
+
+### Mid-project pipeline audit
+
+With the stream processor running, publish one uniquely identified simulator
+event and measure when its `TRANSFERRED_TO` edge becomes queryable in Neo4j:
+
+```powershell
+fingraph-audit --target-ms 1000
+```
+
+The command opens and verifies both connections before starting the timer,
+waits for Kafka's acknowledgement, and polls Neo4j every 10 ms. It prints a
+JSON result and exits non-zero unless the edge is visible in under one second.
+The consumer uses a 50 ms Python bundle timeout by default so low-volume fraud
+events are not held by Flink's throughput-oriented 1000 ms default.
 
 ### Stream-contract validation
 

@@ -1,0 +1,27 @@
+FROM python:3.11-slim-bookworm
+
+ARG FLINK_KAFKA_CONNECTOR_VERSION=3.3.0-1.20
+ARG FLINK_KAFKA_CONNECTOR_SHA1=9e7e2bb762e6cb489bcc76f2637e824fbb6f08c3
+
+ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 \
+    PATH=/usr/lib/jvm/java-17-openjdk-amd64/bin:$PATH \
+    PYTHONUNBUFFERED=1 \
+    FLINK_KAFKA_CONNECTOR_JAR=/opt/flink-connectors/flink-sql-connector-kafka-3.3.0-1.20.jar
+
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends ca-certificates curl openjdk-17-jre-headless \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY . .
+
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python -m pip install --timeout 1000 --retries 10 --editable ".[streaming]" \
+    && mkdir -p /opt/flink-connectors \
+    && curl --fail --silent --show-error --location \
+       --retry 10 --retry-all-errors --retry-delay 2 \
+       "https://repo.maven.apache.org/maven2/org/apache/flink/flink-sql-connector-kafka/${FLINK_KAFKA_CONNECTOR_VERSION}/flink-sql-connector-kafka-${FLINK_KAFKA_CONNECTOR_VERSION}.jar" \
+       --output "$FLINK_KAFKA_CONNECTOR_JAR" \
+    && echo "${FLINK_KAFKA_CONNECTOR_SHA1}  ${FLINK_KAFKA_CONNECTOR_JAR}" | sha1sum --check --strict
+
+CMD ["fingraph-stream"]
