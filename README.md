@@ -147,6 +147,32 @@ counterparty breadth, recent transfer volume, and transaction risk indicators.
 The score components are returned for analyst review; Week 3 GDS algorithms
 will enrich rather than replace this rules-based baseline.
 
+## Run Week 3 GDS community detection
+
+The local Neo4j service uses Neo4j 5.26 Community with the compatible Graph
+Data Science plugin. Start Neo4j and verify that GDS is available:
+
+```powershell
+docker compose up -d neo4j
+docker compose exec neo4j cypher-shell -u neo4j -p change-me-now `
+  "RETURN gds.version();"
+```
+
+After transaction data has been ingested and the Week 2 risk scores have been
+refreshed, run weighted Louvain community detection:
+
+```powershell
+fingraph-gds --concurrency 1
+```
+
+The command projects `Account` nodes and `TRANSFERRED_TO` relationships into
+the GDS in-memory catalog. Relationships are treated as undirected for
+community detection, and parallel transaction amounts are summed into a
+`transaction_volume` weight. Louvain writes `louvain_community_id` back to
+each account and returns community size and risk-score summaries for analyst
+review. The temporary projection is dropped after every run so repeated runs
+do not leak graph-catalog memory.
+
 ## Verification
 
 ```powershell
@@ -163,5 +189,5 @@ score parameter handling.
 - **Week 2:** Flink consumer, transaction cleaning, Neo4j real-time upserts,
   and multi-hop Cypher risk queries.
 - **Week 3:** Neo4j Graph Data Science community and centrality scoring plus
-  dashboard integration.
+  dashboard integration (weighted Louvain community detection implemented).
 - **Week 4:** alert automation and investigation-dashboard refinement.

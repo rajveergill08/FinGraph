@@ -21,5 +21,8 @@ FOR (account:Account) ON (account.risk_tier);
 CREATE INDEX account_graph_risk_score IF NOT EXISTS
 FOR (account:Account) ON (account.graph_risk_score);
 
+CREATE INDEX account_louvain_community_id IF NOT EXISTS
+FOR (account:Account) ON (account.louvain_community_id);
+
 CREATE INDEX transfer_occurred_at IF NOT EXISTS
 FOR ()-[transfer:TRANSFERRED_TO]-() ON (transfer.occurred_at);

@@ -27,6 +27,7 @@ fingraph-sim = "fingraph.cli:main"
 fingraph-stream = "fingraph.flink_consumer:main"
 fingraph-analytics = "fingraph.graph_analytics:main"
 fingraph-audit = "fingraph.pipeline_audit:main"
+fingraph-gds = "fingraph.gds_analytics:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
