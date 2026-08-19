@@ -173,6 +173,21 @@ each account and returns community size and risk-score summaries for analyst
 review. The temporary projection is dropped after every run so repeated runs
 do not leak graph-catalog memory.
 
+### PageRank account centrality
+
+Run weighted PageRank after transaction data has reached Neo4j:
+
+```powershell
+fingraph-pagerank --concurrency 1
+```
+
+The command preserves the direction of `TRANSFERRED_TO` relationships and
+sums parallel transaction amounts into a `transaction_volume` weight. It
+writes a MinMax-normalized `pagerank_score` between 0 and 1 to each account,
+then returns the highest-centrality accounts with their community ID, graph
+risk score, and inbound/outbound transfer context. The temporary directed
+projection is always dropped after the run.
+
 ## Verification
 
 ```powershell
@@ -181,13 +196,13 @@ python -m unittest discover -s tests -v
 ```
 
 The tests check simulator integrity, Kafka provisioning and payloads, stream
-validation, Neo4j upsert boundaries, circular-flow query safeguards, and risk
-score parameter handling.
+validation, Neo4j upsert boundaries, circular-flow safeguards, risk-score
+parameters, weighted Louvain communities, and weighted PageRank centrality.
 
 ## Planned milestones
 
 - **Week 2:** Flink consumer, transaction cleaning, Neo4j real-time upserts,
   and multi-hop Cypher risk queries.
 - **Week 3:** Neo4j Graph Data Science community and centrality scoring plus
-  dashboard integration (weighted Louvain community detection implemented).
+  dashboard integration (weighted Louvain and PageRank implemented).
 - **Week 4:** alert automation and investigation-dashboard refinement.
