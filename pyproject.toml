@@ -9,12 +9,15 @@ description = "Streaming graph analytics foundation for financial-crime investig
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+  "fastapi>=0.116,<1",
   "kafka-python-ng>=2.2.3",
   "neo4j>=5.23,<6",
+  "uvicorn>=0.35,<1",
 ]
 
 [project.optional-dependencies]
 dev = [
+  "httpx2>=2.12,<3",
   "pytest>=8.0",
 ]
 streaming = [
@@ -29,6 +32,7 @@ fingraph-analytics = "fingraph.graph_analytics:main"
 fingraph-audit = "fingraph.pipeline_audit:main"
 fingraph-gds = "fingraph.gds_analytics:main"
 fingraph-pagerank = "fingraph.gds_centrality:main"
+fingraph-dashboard-api = "fingraph.dashboard_api:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -188,6 +188,25 @@ then returns the highest-centrality accounts with their community ID, graph
 risk score, and inbound/outbound transfer context. The temporary directed
 projection is always dropped after the run.
 
+## Run the Week 3 analyst dashboard API
+
+Start the read-only API and Neo4j through the dashboard Compose profile:
+
+```powershell
+docker compose --profile dashboard up --build -d dashboard-api
+Invoke-RestMethod http://localhost:8000/health
+Invoke-RestMethod "http://localhost:8000/api/graph?edge_limit=200"
+```
+
+Interactive API documentation is available at `http://localhost:8000/docs`.
+`GET /api/graph` returns visualization-ready account nodes and transaction
+edges. Analysts can bound the response and filter it with `edge_limit`,
+`minimum_risk_score`, `minimum_pagerank_score`, and `community_id`. The API
+routes parameterized Cypher as read traffic, caps every response at 500 edges,
+and keeps Neo4j credentials on the server instead of exposing them to the
+browser. Configure the future React development origin with
+`DASHBOARD_ALLOWED_ORIGINS`.
+
 ## Verification
 
 ```powershell
@@ -197,12 +216,14 @@ python -m unittest discover -s tests -v
 
 The tests check simulator integrity, Kafka provisioning and payloads, stream
 validation, Neo4j upsert boundaries, circular-flow safeguards, risk-score
-parameters, weighted Louvain communities, and weighted PageRank centrality.
+parameters, weighted Louvain communities, weighted PageRank centrality, and
+the dashboard API contract.
 
 ## Planned milestones
 
 - **Week 2:** Flink consumer, transaction cleaning, Neo4j real-time upserts,
   and multi-hop Cypher risk queries.
 - **Week 3:** Neo4j Graph Data Science community and centrality scoring plus
-  dashboard integration (weighted Louvain and PageRank implemented).
+  dashboard integration (analytics and read-only dashboard API implemented;
+  interactive visualization next).
 - **Week 4:** alert automation and investigation-dashboard refinement.
