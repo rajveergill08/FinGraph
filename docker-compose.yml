@@ -89,5 +89,24 @@ services:
       retries: 12
     restart: unless-stopped
 
+  dashboard-web:
+    profiles: ["dashboard"]
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+      args:
+        VITE_API_BASE_URL: ${DASHBOARD_API_URL:-http://localhost:8000}
+    depends_on:
+      dashboard-api:
+        condition: service_healthy
+    ports:
+      - "${DASHBOARD_WEB_PORT:-5173}:80"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost/"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
 volumes:
   neo4j_data:

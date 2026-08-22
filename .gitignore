@@ -12,3 +12,5 @@ data/
 tmp/
 .flink/
 .docker-cache/
+web/node_modules/
+*.tsbuildinfo

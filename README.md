@@ -204,8 +204,35 @@ edges. Analysts can bound the response and filter it with `edge_limit`,
 `minimum_risk_score`, `minimum_pagerank_score`, and `community_id`. The API
 routes parameterized Cypher as read traffic, caps every response at 500 edges,
 and keeps Neo4j credentials on the server instead of exposing them to the
-browser. Configure the future React development origin with
+browser. Configure the React development origin with
 `DASHBOARD_ALLOWED_ORIGINS`.
+
+### Explore the React/D3 fraud network
+
+The analyst workspace renders the API snapshot as a directed, force-positioned
+network. Node colour and size surface graph risk, transfer arrows retain money
+flow direction, and selecting an account reveals its PageRank, Louvain
+community, transfer connections, and observed risk indicators. Analysts can
+bound the latest transfers, set a minimum risk score, or isolate a community
+without exposing Neo4j credentials to the browser.
+
+Run the dashboard API and frontend together:
+
+```powershell
+docker compose --profile dashboard up --build -d dashboard-web
+Start-Process http://localhost:5173
+```
+
+For frontend development with hot reload, keep the API on port 8000 and run:
+
+```powershell
+cd web
+npm install
+npm run dev
+```
+
+Set `VITE_API_BASE_URL` before `npm run build` when the browser-facing API is
+not available at `http://localhost:8000`.
 
 ## Verification
 
@@ -217,13 +244,15 @@ python -m unittest discover -s tests -v
 The tests check simulator integrity, Kafka provisioning and payloads, stream
 validation, Neo4j upsert boundaries, circular-flow safeguards, risk-score
 parameters, weighted Louvain communities, weighted PageRank centrality, and
-the dashboard API contract.
+the dashboard API contract. The `web` workspace separately verifies API filter
+routing and dashboard graph summaries with `npm test`, while `npm run build`
+performs the strict TypeScript production build.
 
 ## Planned milestones
 
 - **Week 2:** Flink consumer, transaction cleaning, Neo4j real-time upserts,
   and multi-hop Cypher risk queries.
 - **Week 3:** Neo4j Graph Data Science community and centrality scoring plus
-  dashboard integration (analytics and read-only dashboard API implemented;
-  interactive visualization next).
+  dashboard integration (analytics, read-only API, and interactive React/D3
+  visualization foundation implemented).
 - **Week 4:** alert automation and investigation-dashboard refinement.
