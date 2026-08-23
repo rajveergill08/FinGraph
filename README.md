@@ -216,6 +216,11 @@ community, transfer connections, and observed risk indicators. Analysts can
 bound the latest transfers, set a minimum risk score, or isolate a community
 without exposing Neo4j credentials to the browser.
 
+Use **Find account** to focus an account ID from the current bounded snapshot.
+Select any transfer arrow or an account's connected-transfer row to inspect the
+amount in its original currency, source and destination, timestamp, channel,
+syndicate link, transaction ID, and individual risk indicators.
+
 Run the dashboard API and frontend together:
 
 ```powershell
@@ -245,8 +250,9 @@ The tests check simulator integrity, Kafka provisioning and payloads, stream
 validation, Neo4j upsert boundaries, circular-flow safeguards, risk-score
 parameters, weighted Louvain communities, weighted PageRank centrality, and
 the dashboard API contract. The `web` workspace separately verifies API filter
-routing and dashboard graph summaries with `npm test`, while `npm run build`
-performs the strict TypeScript production build.
+routing, graph summaries, account matching, and currency-safe transfer display
+with `npm test`, while `npm run build` performs the strict TypeScript production
+build.
 
 ## Planned milestones
 

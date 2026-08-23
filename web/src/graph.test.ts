@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   deriveDashboardMetrics,
+  findAccountByQuery,
+  formatTransferAmount,
   highestRiskNode,
   riskBand,
 } from "./graph";
@@ -84,5 +86,18 @@ describe("dashboard graph summaries", () => {
     expect(riskBand(70)).toBe("critical");
     expect(riskBand(40)).toBe("watch");
     expect(riskBand(39.9)).toBe("normal");
+  });
+
+  it("finds exact, prefix, and partial account matches without case sensitivity", () => {
+    expect(findAccountByQuery(nodes, "ACCOUNT-B")?.id).toBe("account-b");
+    expect(findAccountByQuery(nodes, "account-")?.id).toBe("account-c");
+    expect(findAccountByQuery(nodes, "count-a")?.id).toBe("account-a");
+    expect(findAccountByQuery(nodes, "missing")).toBeNull();
+    expect(findAccountByQuery(nodes, "  ")).toBeNull();
+  });
+
+  it("formats transaction values with their own currency", () => {
+    expect(formatTransferAmount(9900, "USD")).toBe("$9,900.00");
+    expect(formatTransferAmount(1200.5, null)).toBe("1,200.5");
   });
 });

@@ -28,7 +28,9 @@ interface NetworkGraphProps {
   nodes: DashboardNode[];
   edges: DashboardEdge[];
   selectedNodeId: string | null;
+  selectedEdgeId: string | null;
   onSelectNode: (nodeId: string) => void;
+  onSelectEdge: (edgeId: string) => void;
 }
 
 const WIDTH = 1000;
@@ -39,6 +41,14 @@ function nodeColour(node: DashboardNode): string {
   if (band === "critical") return "#ff665f";
   if (band === "watch") return "#e4b15b";
   return "#42d6a4";
+}
+
+function linkWidth(link: GraphLink): number {
+  return Math.max(1, Math.min(4, Math.log10(link.amount + 1) - 1));
+}
+
+function linkEndpointId(value: string | GraphNode): string {
+  return typeof value === "object" ? value.id : value;
 }
 
 function endpoint(
@@ -55,7 +65,9 @@ export default function NetworkGraph({
   nodes,
   edges,
   selectedNodeId,
+  selectedEdgeId,
   onSelectNode,
+  onSelectEdge,
 }: NetworkGraphProps) {
   const svgRef = useRef<SVGSVGElement>(null);
 
@@ -113,9 +125,7 @@ export default function NetworkGraph({
       .attr("stroke", (link) =>
         link.risk_indicators.length > 0 ? "#ae655f" : "#37564f",
       )
-      .attr("stroke-width", (link) =>
-        Math.max(1, Math.min(4, Math.log10(link.amount + 1) - 1)),
-      )
+      .attr("stroke-width", linkWidth)
       .attr("stroke-opacity", 0.72)
       .attr("marker-end", "url(#transfer-arrow)");
 
@@ -125,6 +135,30 @@ export default function NetworkGraph({
         (link) =>
           `${link.id}\n$${link.amount.toLocaleString()}\n${link.risk_indicators.join(", ") || "No indicators"}`,
       );
+
+    const linkHitboxes = canvas
+      .append("g")
+      .attr("class", "graph-link-hitboxes")
+      .selectAll<SVGLineElement, GraphLink>("line")
+      .data(graphLinks, (link) => link.id)
+      .join("line")
+      .attr("class", "graph-link-hit")
+      .attr("stroke", "transparent")
+      .attr("stroke-width", 16)
+      .attr("tabindex", 0)
+      .attr("role", "button")
+      .attr(
+        "aria-label",
+        (link) =>
+          `Inspect transfer ${link.id} from ${linkEndpointId(link.source)} to ${linkEndpointId(link.target)}, amount ${link.amount}`,
+      )
+      .on("click", (_, link) => onSelectEdge(link.id))
+      .on("keydown", (event, link) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onSelectEdge(link.id);
+        }
+      });
 
     const nodeGroups = canvas
       .append("g")
@@ -208,6 +242,11 @@ export default function NetworkGraph({
         .attr("y1", (link) => endpoint(link.source, nodeById).y ?? 0)
         .attr("x2", (link) => endpoint(link.target, nodeById).x ?? 0)
         .attr("y2", (link) => endpoint(link.target, nodeById).y ?? 0);
+      linkHitboxes
+        .attr("x1", (link) => endpoint(link.source, nodeById).x ?? 0)
+        .attr("y1", (link) => endpoint(link.source, nodeById).y ?? 0)
+        .attr("x2", (link) => endpoint(link.target, nodeById).x ?? 0)
+        .attr("y2", (link) => endpoint(link.target, nodeById).y ?? 0);
       nodeGroups.attr(
         "transform",
         (node) => `translate(${node.x ?? 0},${node.y ?? 0})`,
@@ -217,7 +256,7 @@ export default function NetworkGraph({
     return () => {
       simulation.stop();
     };
-  }, [edges, nodes, onSelectNode]);
+  }, [edges, nodes, onSelectEdge, onSelectNode]);
 
   useEffect(() => {
     if (!svgRef.current) return;
@@ -228,6 +267,25 @@ export default function NetworkGraph({
       )
       .attr("stroke-width", (node) => (node.id === selectedNodeId ? 5 : 3));
   }, [selectedNodeId]);
+
+  useEffect(() => {
+    if (!svgRef.current) return;
+    select(svgRef.current)
+      .selectAll<SVGLineElement, GraphLink>(".graph-links line")
+      .attr("stroke", (link) =>
+        link.id === selectedEdgeId
+          ? "#f3fffb"
+          : link.risk_indicators.length > 0
+            ? "#ae655f"
+            : "#37564f",
+      )
+      .attr("stroke-opacity", (link) =>
+        link.id === selectedEdgeId ? 1 : 0.72,
+      )
+      .attr("stroke-width", (link) =>
+        linkWidth(link) + (link.id === selectedEdgeId ? 2 : 0),
+      );
+  }, [selectedEdgeId]);
 
   return (
     <svg

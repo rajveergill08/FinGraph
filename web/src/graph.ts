@@ -39,3 +39,58 @@ export function riskBand(score: number): "critical" | "watch" | "normal" {
   if (score >= 40) return "watch";
   return "normal";
 }
+
+export function findAccountByQuery(
+  nodes: DashboardNode[],
+  query: string,
+): DashboardNode | null {
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  if (!normalizedQuery) return null;
+
+  const rankedNodes = [...nodes].sort(
+    (left, right) =>
+      right.graph_risk_score - left.graph_risk_score ||
+      right.pagerank_score - left.pagerank_score ||
+      left.id.localeCompare(right.id),
+  );
+  return (
+    rankedNodes.find(
+      (node) =>
+        node.id.toLocaleLowerCase() === normalizedQuery ||
+        node.label.toLocaleLowerCase() === normalizedQuery,
+    ) ??
+    rankedNodes.find(
+      (node) =>
+        node.id.toLocaleLowerCase().startsWith(normalizedQuery) ||
+        node.label.toLocaleLowerCase().startsWith(normalizedQuery),
+    ) ??
+    rankedNodes.find(
+      (node) =>
+        node.id.toLocaleLowerCase().includes(normalizedQuery) ||
+        node.label.toLocaleLowerCase().includes(normalizedQuery),
+    ) ??
+    null
+  );
+}
+
+export function formatTransferAmount(
+  amount: number,
+  currency: string | null,
+): string {
+  const currencyCode = currency?.trim().toUpperCase() ?? "";
+  if (/^[A-Z]{3}$/.test(currencyCode)) {
+    try {
+      return new Intl.NumberFormat("en-US", {
+        style: "currency",
+        currency: currencyCode,
+        maximumFractionDigits: 2,
+      }).format(amount);
+    } catch {
+      // Fall through when the runtime does not recognize the ISO code.
+    }
+  }
+  const formattedAmount = new Intl.NumberFormat("en-US", {
+    maximumFractionDigits: 2,
+  }).format(amount);
+  return currencyCode ? `${formattedAmount} ${currencyCode}` : formattedAmount;
+}
