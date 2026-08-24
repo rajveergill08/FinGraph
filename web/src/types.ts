@@ -35,6 +35,24 @@ export interface GraphSnapshot {
   filters: GraphFilters;
 }
 
+export interface GraphViewNode extends DashboardNode {
+  kind: "account" | "community";
+  member_count: number;
+}
+
+export interface GraphView {
+  nodes: GraphViewNode[];
+  edges: DashboardEdge[];
+  hiddenInternalTransferCount: number;
+}
+
+export interface CommunitySummary {
+  id: number;
+  accountCount: number;
+  highRiskCount: number;
+  maximumRiskScore: number;
+}
+
 export interface DashboardMetrics {
   accountCount: number;
   transferCount: number;

@@ -1,6 +1,9 @@
 import type {
+  CommunitySummary,
   DashboardMetrics,
   DashboardNode,
+  GraphView,
+  GraphViewNode,
   GraphSnapshot,
 } from "./types";
 
@@ -93,4 +96,99 @@ export function formatTransferAmount(
     maximumFractionDigits: 2,
   }).format(amount);
   return currencyCode ? `${formattedAmount} ${currencyCode}` : formattedAmount;
+}
+
+export function deriveCommunitySummaries(
+  nodes: DashboardNode[],
+): CommunitySummary[] {
+  const communities = new Map<number, DashboardNode[]>();
+  for (const node of nodes) {
+    if (node.community_id === null) continue;
+    const members = communities.get(node.community_id) ?? [];
+    members.push(node);
+    communities.set(node.community_id, members);
+  }
+  return [...communities.entries()]
+    .map(([id, members]) => ({
+      id,
+      accountCount: members.length,
+      highRiskCount: members.filter(
+        (member) => member.graph_risk_score >= HIGH_RISK_THRESHOLD,
+      ).length,
+      maximumRiskScore: Math.max(
+        ...members.map((member) => member.graph_risk_score),
+      ),
+    }))
+    .sort(
+      (left, right) =>
+        right.maximumRiskScore - left.maximumRiskScore || left.id - right.id,
+    );
+}
+
+export function buildGraphView(
+  snapshot: GraphSnapshot,
+  collapsedCommunityIds: ReadonlySet<number>,
+): GraphView {
+  const collapsibleCommunities = new Map<number, DashboardNode[]>();
+  for (const node of snapshot.nodes) {
+    if (
+      node.community_id !== null &&
+      collapsedCommunityIds.has(node.community_id)
+    ) {
+      const members = collapsibleCommunities.get(node.community_id) ?? [];
+      members.push(node);
+      collapsibleCommunities.set(node.community_id, members);
+    }
+  }
+
+  const endpointIds = new Map<string, string>();
+  const accountNodes: GraphViewNode[] = [];
+  for (const node of snapshot.nodes) {
+    if (
+      node.community_id !== null &&
+      collapsibleCommunities.has(node.community_id)
+    ) {
+      endpointIds.set(node.id, `community:${node.community_id}`);
+      continue;
+    }
+    endpointIds.set(node.id, node.id);
+    accountNodes.push({ ...node, kind: "account", member_count: 1 });
+  }
+
+  const communityNodes: GraphViewNode[] = [
+    ...collapsibleCommunities.entries(),
+  ].map(([communityId, members]) => ({
+    id: `community:${communityId}`,
+    label: `Community ${communityId}`,
+    country: null,
+    account_type: "community",
+    risk_tier: "cluster",
+    graph_risk_score: Math.max(
+      ...members.map((member) => member.graph_risk_score),
+    ),
+    pagerank_score: Math.max(
+      ...members.map((member) => member.pagerank_score),
+    ),
+    community_id: communityId,
+    kind: "community",
+    member_count: members.length,
+  }));
+
+  let hiddenInternalTransferCount = 0;
+  const edges = snapshot.edges.flatMap((edge) => {
+    const source = endpointIds.get(edge.source);
+    const target = endpointIds.get(edge.target);
+    if (!source || !target) return [];
+    if (source === target) {
+      hiddenInternalTransferCount += 1;
+      return [];
+    }
+    return [{ ...edge, source, target }];
+  });
+
+  return {
+    nodes: [...accountNodes, ...communityNodes],
+    edges,
+    hiddenInternalTransferCount,
+  };
 }

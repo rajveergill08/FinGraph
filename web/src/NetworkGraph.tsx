@@ -12,9 +12,9 @@ import {
   type SimulationNodeDatum,
 } from "d3";
 import { riskBand } from "./graph";
-import type { DashboardEdge, DashboardNode } from "./types";
+import type { DashboardEdge, GraphViewNode } from "./types";
 
-interface GraphNode extends DashboardNode, SimulationNodeDatum {}
+interface GraphNode extends GraphViewNode, SimulationNodeDatum {}
 
 interface GraphLink extends SimulationLinkDatum<GraphNode> {
   id: string;
@@ -25,18 +25,20 @@ interface GraphLink extends SimulationLinkDatum<GraphNode> {
 }
 
 interface NetworkGraphProps {
-  nodes: DashboardNode[];
+  nodes: GraphViewNode[];
   edges: DashboardEdge[];
   selectedNodeId: string | null;
   selectedEdgeId: string | null;
   onSelectNode: (nodeId: string) => void;
   onSelectEdge: (edgeId: string) => void;
+  onExpandCommunity: (communityId: number) => void;
 }
 
 const WIDTH = 1000;
 const HEIGHT = 620;
 
-function nodeColour(node: DashboardNode): string {
+function nodeColour(node: GraphViewNode): string {
+  if (node.kind === "community") return "#7aa6ff";
   const band = riskBand(node.graph_risk_score);
   if (band === "critical") return "#ff665f";
   if (band === "watch") return "#e4b15b";
@@ -68,6 +70,7 @@ export default function NetworkGraph({
   selectedEdgeId,
   onSelectNode,
   onSelectEdge,
+  onExpandCommunity,
 }: NetworkGraphProps) {
   const svgRef = useRef<SVGSVGElement>(null);
 
@@ -94,6 +97,13 @@ export default function NetworkGraph({
         source: edge.source,
         target: edge.target,
       }));
+    const activateNode = (node: GraphNode) => {
+      if (node.kind === "community" && node.community_id !== null) {
+        onExpandCommunity(node.community_id);
+        return;
+      }
+      onSelectNode(node.id);
+    };
 
     const definitions = svg.append("defs");
     definitions
@@ -166,24 +176,32 @@ export default function NetworkGraph({
       .selectAll<SVGGElement, GraphNode>("g")
       .data(graphNodes, (node) => node.id)
       .join("g")
-      .attr("class", "graph-node")
+      .attr("class", (node) =>
+        node.kind === "community" ? "graph-node community-node" : "graph-node",
+      )
       .attr("tabindex", 0)
       .attr("role", "button")
       .attr("aria-label", (node) =>
-        `Inspect ${node.label}, risk score ${node.graph_risk_score}`,
+        node.kind === "community"
+          ? `Expand community ${node.community_id}, ${node.member_count} accounts, maximum risk score ${node.graph_risk_score}`
+          : `Inspect ${node.label}, risk score ${node.graph_risk_score}`,
       )
-      .on("click", (_, node) => onSelectNode(node.id))
+      .on("click", (_, node) => activateNode(node))
       .on("keydown", (event, node) => {
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
-          onSelectNode(node.id);
+          activateNode(node);
         }
       });
 
     nodeGroups
       .append("circle")
       .attr("class", "node-circle")
-      .attr("r", (node) => 8 + Math.min(9, node.graph_risk_score / 12))
+      .attr("r", (node) =>
+        node.kind === "community"
+          ? 18 + Math.min(14, Math.sqrt(node.member_count) * 3)
+          : 8 + Math.min(9, node.graph_risk_score / 12),
+      )
       .attr("fill", nodeColour)
       .attr("stroke", "#071411")
       .attr("stroke-width", 3);
@@ -195,14 +213,18 @@ export default function NetworkGraph({
       .attr("y", 4)
       .text((node) => node.label)
       .style("display", (node) =>
-        node.graph_risk_score >= 70 || nodes.length <= 20 ? "block" : "none",
+        node.kind === "community" || node.graph_risk_score >= 70 || nodes.length <= 20
+          ? "block"
+          : "none",
       );
 
     nodeGroups
       .append("title")
       .text(
         (node) =>
-          `${node.label}\nRisk ${node.graph_risk_score.toFixed(1)} · PageRank ${node.pagerank_score.toFixed(3)}`,
+          node.kind === "community"
+            ? `${node.label}\n${node.member_count} accounts · max risk ${node.graph_risk_score.toFixed(1)}\nSelect to expand`
+            : `${node.label}\nRisk ${node.graph_risk_score.toFixed(1)} · PageRank ${node.pagerank_score.toFixed(3)}`,
       );
 
     const simulation = forceSimulation(graphNodes)
@@ -256,7 +278,7 @@ export default function NetworkGraph({
     return () => {
       simulation.stop();
     };
-  }, [edges, nodes, onSelectEdge, onSelectNode]);
+  }, [edges, nodes, onExpandCommunity, onSelectEdge, onSelectNode]);
 
   useEffect(() => {
     if (!svgRef.current) return;

@@ -2,19 +2,24 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type FormEvent,
 } from "react";
 import { fetchGraphSnapshot } from "./api";
 import {
+  buildGraphView,
   deriveDashboardMetrics,
+  deriveCommunitySummaries,
   findAccountByQuery,
   formatTransferAmount,
   highestRiskNode,
   riskBand,
 } from "./graph";
 import NetworkGraph from "./NetworkGraph";
+import { AUTO_REFRESH_MS, startAutoRefresh } from "./refresh";
 import type {
+  CommunitySummary,
   DashboardEdge,
   DashboardNode,
   GraphFilters,
@@ -28,7 +33,7 @@ const DEFAULT_FILTERS: GraphFilters = {
   community_id: null,
 };
 
-type LoadStatus = "loading" | "ready" | "error";
+type LoadStatus = "loading" | "refreshing" | "ready" | "error";
 
 function metricValue(value: number) {
   return value.toLocaleString();
@@ -91,6 +96,54 @@ function TransferDetail({ edge, onClose }: { edge: DashboardEdge; onClose: () =>
         ) : (
           <small>No explicit risk indicators</small>
         )}
+      </div>
+    </section>
+  );
+}
+
+function CommunityControls({
+  communities,
+  collapsedCommunityIds,
+  hiddenInternalTransferCount,
+  onToggleCommunity,
+  onExpandAll,
+  onCollapseAll,
+}: {
+  communities: CommunitySummary[];
+  collapsedCommunityIds: ReadonlySet<number>;
+  hiddenInternalTransferCount: number;
+  onToggleCommunity: (communityId: number) => void;
+  onExpandAll: () => void;
+  onCollapseAll: () => void;
+}) {
+  const allCollapsed =
+    communities.length > 0 &&
+    communities.every((community) => collapsedCommunityIds.has(community.id));
+  return (
+    <section className="community-toolbar" aria-label="Community display controls">
+      <div className="community-toolbar-heading">
+        <span><strong>Louvain communities</strong><small>{hiddenInternalTransferCount > 0 ? `${hiddenInternalTransferCount} internal transfers summarized` : "All transfers visible"}</small></span>
+        <button type="button" onClick={allCollapsed ? onExpandAll : onCollapseAll} disabled={communities.length === 0}>
+          {allCollapsed ? "Expand all" : "Collapse all"}
+        </button>
+      </div>
+      <div className="community-list">
+        {communities.length > 0 ? communities.map((community) => {
+          const collapsed = collapsedCommunityIds.has(community.id);
+          return (
+            <button
+              type="button"
+              key={community.id}
+              className={collapsed ? "community-control collapsed" : "community-control"}
+              aria-pressed={collapsed}
+              onClick={() => onToggleCommunity(community.id)}
+            >
+              <span>Community {community.id}</span>
+              <strong>{community.accountCount}</strong>
+              <small>{collapsed ? "Expand" : "Collapse"}</small>
+            </button>
+          );
+        }) : <p>Run Louvain scoring to enable community controls.</p>}
       </div>
     </section>
   );
@@ -198,18 +251,24 @@ export default function App() {
   const [appliedFilters, setAppliedFilters] = useState(DEFAULT_FILTERS);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
+  const [collapsedCommunityIds, setCollapsedCommunityIds] = useState<Set<number>>(
+    () => new Set(),
+  );
+  const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(true);
   const [accountQuery, setAccountQuery] = useState("");
   const [searchMessage, setSearchMessage] = useState("");
   const [status, setStatus] = useState<LoadStatus>("loading");
   const [error, setError] = useState("");
   const [refreshVersion, setRefreshVersion] = useState(0);
+  const hasSnapshot = useRef(false);
 
   useEffect(() => {
     const controller = new AbortController();
-    setStatus("loading");
+    setStatus(hasSnapshot.current ? "refreshing" : "loading");
     setError("");
     fetchGraphSnapshot(appliedFilters, controller.signal)
       .then((nextSnapshot) => {
+        hasSnapshot.current = true;
         setSnapshot(nextSnapshot);
         setSelectedNodeId((current) => {
           if (current && nextSnapshot.nodes.some((node) => node.id === current)) return current;
@@ -218,6 +277,18 @@ export default function App() {
         setSelectedEdgeId((current) =>
           current && nextSnapshot.edges.some((edge) => edge.id === current) ? current : null,
         );
+        setCollapsedCommunityIds((current) => {
+          const availableCommunities = new Set(
+            nextSnapshot.nodes.flatMap((node) =>
+              node.community_id === null ? [] : [node.community_id],
+            ),
+          );
+          return new Set(
+            [...current].filter((communityId) =>
+              availableCommunities.has(communityId),
+            ),
+          );
+        });
         setStatus("ready");
       })
       .catch((reason: unknown) => {
@@ -228,9 +299,26 @@ export default function App() {
     return () => controller.abort();
   }, [appliedFilters, refreshVersion]);
 
+  useEffect(() => {
+    if (!autoRefreshEnabled) return undefined;
+    return startAutoRefresh(
+      () => setRefreshVersion((current) => current + 1),
+      AUTO_REFRESH_MS,
+      () => document.visibilityState === "visible",
+    );
+  }, [autoRefreshEnabled]);
+
   const metrics = useMemo(
     () => snapshot ? deriveDashboardMetrics(snapshot) : null,
     [snapshot],
+  );
+  const communities = useMemo(
+    () => deriveCommunitySummaries(snapshot?.nodes ?? []),
+    [snapshot],
+  );
+  const graphView = useMemo(
+    () => snapshot ? buildGraphView(snapshot, collapsedCommunityIds) : null,
+    [collapsedCommunityIds, snapshot],
   );
   const selectedNode = snapshot?.nodes.find((node) => node.id === selectedNodeId) ?? null;
   const selectedEdges = snapshot?.edges.filter(
@@ -251,6 +339,40 @@ export default function App() {
     );
   }, [snapshot]);
 
+  const expandCommunity = useCallback((communityId: number) => {
+    setCollapsedCommunityIds((current) => {
+      const next = new Set(current);
+      next.delete(communityId);
+      return next;
+    });
+  }, []);
+
+  const toggleCommunity = useCallback((communityId: number) => {
+    const willCollapse = !collapsedCommunityIds.has(communityId);
+    setCollapsedCommunityIds((current) => {
+      const next = new Set(current);
+      if (next.has(communityId)) next.delete(communityId);
+      else next.add(communityId);
+      return next;
+    });
+    if (willCollapse && selectedNode?.community_id === communityId) {
+      setSelectedNodeId(null);
+      setSelectedEdgeId(null);
+    }
+  }, [collapsedCommunityIds, selectedNode]);
+
+  const collapseAllCommunities = useCallback(() => {
+    setCollapsedCommunityIds(new Set(communities.map((community) => community.id)));
+    if (selectedNode?.community_id != null) {
+      setSelectedNodeId(null);
+      setSelectedEdgeId(null);
+    }
+  }, [communities, selectedNode]);
+
+  const expandAllCommunities = useCallback(() => {
+    setCollapsedCommunityIds(new Set());
+  }, []);
+
   function applyFilters(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setSelectedEdgeId(null);
@@ -264,6 +386,7 @@ export default function App() {
       setSearchMessage(accountQuery.trim() ? "No account in this snapshot" : "Enter an account ID");
       return;
     }
+    if (match.community_id !== null) expandCommunity(match.community_id);
     selectNode(match.id);
     setAccountQuery(match.label);
     setSearchMessage(`Focused ${match.label}`);
@@ -278,7 +401,7 @@ export default function App() {
         </a>
         <div className="pipeline-status" aria-live="polite">
           <span className={`status-dot status-${status}`} />
-          <span><strong>{status === "ready" ? "Pipeline live" : status === "loading" ? "Syncing graph" : "Pipeline unavailable"}</strong><small>Neo4j snapshot · {formatSnapshotTime(snapshot?.generated_at)}</small></span>
+          <span><strong>{status === "ready" ? "Pipeline live" : status === "refreshing" ? "Refreshing live graph" : status === "loading" ? "Syncing graph" : "Pipeline unavailable"}</strong><small>Neo4j snapshot · {formatSnapshotTime(snapshot?.generated_at)}</small></span>
         </div>
       </header>
 
@@ -289,9 +412,15 @@ export default function App() {
             <h1>Follow the money, not the rows.</h1>
             <p>Trace high-risk accounts, central intermediaries, and syndicate transfers as one connected graph.</p>
           </div>
-          <button className="refresh-button" type="button" onClick={() => setRefreshVersion((value) => value + 1)} disabled={status === "loading"}>
-            <span aria-hidden="true">↻</span> Refresh snapshot
-          </button>
+          <div className="refresh-actions">
+            <button className="auto-refresh-button" type="button" aria-pressed={autoRefreshEnabled} onClick={() => setAutoRefreshEnabled((enabled) => !enabled)}>
+              <span className={autoRefreshEnabled ? "auto-refresh-dot enabled" : "auto-refresh-dot"} aria-hidden="true" />
+              <span><strong>Live refresh {autoRefreshEnabled ? "on" : "off"}</strong><small>Every {AUTO_REFRESH_MS / 1000} seconds</small></span>
+            </button>
+            <button className="refresh-button" type="button" onClick={() => setRefreshVersion((value) => value + 1)} disabled={status === "loading" || status === "refreshing"}>
+              <span aria-hidden="true">↻</span> Refresh now
+            </button>
+          </div>
         </section>
 
         <section className="metric-strip" aria-label="Current graph summary">
@@ -339,24 +468,33 @@ export default function App() {
                 <div className="legend" aria-label="Risk legend"><span className="legend-critical">Critical</span><span className="legend-watch">Watch</span><span className="legend-normal">Normal</span></div>
               </div>
             </header>
+            <CommunityControls
+              communities={communities}
+              collapsedCommunityIds={collapsedCommunityIds}
+              hiddenInternalTransferCount={graphView?.hiddenInternalTransferCount ?? 0}
+              onToggleCommunity={toggleCommunity}
+              onExpandAll={expandAllCommunities}
+              onCollapseAll={collapseAllCommunities}
+            />
             <div className="graph-stage">
-              {snapshot && snapshot.nodes.length > 0 ? (
+              {graphView && graphView.nodes.length > 0 ? (
                 <NetworkGraph
-                  nodes={snapshot.nodes}
-                  edges={snapshot.edges}
+                  nodes={graphView.nodes}
+                  edges={graphView.edges}
                   selectedNodeId={selectedNodeId}
                   selectedEdgeId={selectedEdgeId}
                   onSelectNode={selectNode}
                   onSelectEdge={selectEdge}
+                  onExpandCommunity={expandCommunity}
                 />
               ) : status === "loading" ? (
                 <div className="graph-message"><span className="loading-ring" /><strong>Mapping connected accounts</strong><p>Reading the latest bounded Neo4j snapshot.</p></div>
               ) : (
                 <div className="graph-message"><span className="empty-graph" aria-hidden="true">∅</span><strong>No transfers match these filters</strong><p>Lower the risk threshold or inspect another community.</p></div>
               )}
-              {status === "loading" && snapshot && <div className="updating-badge">Updating graph…</div>}
+              {status === "refreshing" && snapshot && <div className="updating-badge">Live refresh…</div>}
             </div>
-            <footer className="graph-footer"><span>Drag nodes to separate clusters</span><span>Select an arrow to inspect its transfer</span></footer>
+            <footer className="graph-footer"><span>Collapsed clusters summarize internal transfers</span><span>Select a cluster node to expand it</span></footer>
           </article>
 
           <aside className="detail-panel">

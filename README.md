@@ -221,6 +221,12 @@ Select any transfer arrow or an account's connected-transfer row to inspect the
 amount in its original currency, source and destination, timestamp, channel,
 syndicate link, transaction ID, and individual risk indicators.
 
+Live refresh is enabled by default and requests a new bounded snapshot every
+10 seconds while the dashboard tab is visible; analysts can pause it or refresh
+immediately. Louvain community controls collapse account groups into summary
+nodes, hide only their internal arrows, and retain cross-community transfers.
+Selecting a community summary node expands its member accounts again.
+
 Run the dashboard API and frontend together:
 
 ```powershell
@@ -250,7 +256,8 @@ The tests check simulator integrity, Kafka provisioning and payloads, stream
 validation, Neo4j upsert boundaries, circular-flow safeguards, risk-score
 parameters, weighted Louvain communities, weighted PageRank centrality, and
 the dashboard API contract. The `web` workspace separately verifies API filter
-routing, graph summaries, account matching, and currency-safe transfer display
+routing, graph summaries, account matching, currency-safe transfer display,
+visibility-aware refresh scheduling, and community-collapse transformations
 with `npm test`, while `npm run build` performs the strict TypeScript production
 build.
 

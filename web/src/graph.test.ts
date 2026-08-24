@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildGraphView,
   deriveDashboardMetrics,
+  deriveCommunitySummaries,
   findAccountByQuery,
   formatTransferAmount,
   highestRiskNode,
@@ -99,5 +101,33 @@ describe("dashboard graph summaries", () => {
   it("formats transaction values with their own currency", () => {
     expect(formatTransferAmount(9900, "USD")).toBe("$9,900.00");
     expect(formatTransferAmount(1200.5, null)).toBe("1,200.5");
+  });
+
+  it("summarizes Louvain communities by size and highest risk", () => {
+    expect(deriveCommunitySummaries(nodes)).toEqual([
+      { id: 9, accountCount: 1, highRiskCount: 1, maximumRiskScore: 88 },
+      { id: 4, accountCount: 2, highRiskCount: 1, maximumRiskScore: 72 },
+    ]);
+  });
+
+  it("collapses community members while retaining cross-community transfers", () => {
+    const view = buildGraphView(snapshot, new Set([4]));
+
+    expect(view.nodes.map((candidate) => candidate.id).sort()).toEqual([
+      "account-c",
+      "community:4",
+    ]);
+    expect(view.nodes.find((candidate) => candidate.id === "community:4")).toMatchObject({
+      kind: "community",
+      member_count: 2,
+      graph_risk_score: 72,
+    });
+    expect(view.edges).toHaveLength(1);
+    expect(view.edges[0]).toMatchObject({
+      id: "transfer-b",
+      source: "community:4",
+      target: "account-c",
+    });
+    expect(view.hiddenInternalTransferCount).toBe(1);
   });
 });
