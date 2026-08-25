@@ -207,6 +207,12 @@ and keeps Neo4j credentials on the server instead of exposing them to the
 browser. Configure the React development origin with
 `DASHBOARD_ALLOWED_ORIGINS`.
 
+`GET /api/patterns/starbursts` independently scans the recent graph for a
+multi-hop funnel shape: many distinct source accounts transferring through
+multiple intermediaries into one destination. The bounded query uses topology
+and transfer time order rather than trusting simulator syndicate labels. Its
+lookback, source, intermediary, and result thresholds are validated by the API.
+
 ### Explore the React/D3 fraud network
 
 The analyst workspace renders the API snapshot as a directed, force-positioned
@@ -226,6 +232,9 @@ Live refresh is enabled by default and requests a new bounded snapshot every
 immediately. Louvain community controls collapse account groups into summary
 nodes, hide only their internal arrows, and retain cross-community transfers.
 Selecting a community summary node expands its member accounts again.
+Starburst surveillance refreshes with the graph, shows the number of sources,
+intermediaries, and linked transfers for every detected funnel, and lets the
+analyst focus its destination account when it is present in the current view.
 
 Run the dashboard API and frontend together:
 

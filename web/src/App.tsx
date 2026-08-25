@@ -6,7 +6,7 @@ import {
   useState,
   type FormEvent,
 } from "react";
-import { fetchGraphSnapshot } from "./api";
+import { fetchGraphSnapshot, fetchStarburstPatterns } from "./api";
 import {
   buildGraphView,
   deriveDashboardMetrics,
@@ -24,6 +24,8 @@ import type {
   DashboardNode,
   GraphFilters,
   GraphSnapshot,
+  StarburstPattern,
+  StarburstSnapshot,
 } from "./types";
 
 const DEFAULT_FILTERS: GraphFilters = {
@@ -149,6 +151,73 @@ function CommunityControls({
   );
 }
 
+function StarburstAlerts({
+  snapshot,
+  visibleAccountIds,
+  onFocusSink,
+}: {
+  snapshot: StarburstSnapshot | null;
+  visibleAccountIds: ReadonlySet<string>;
+  onFocusSink: (pattern: StarburstPattern) => void;
+}) {
+  const patterns = snapshot?.patterns ?? [];
+  return (
+    <section
+      className={patterns.length > 0 ? "starburst-alerts active" : "starburst-alerts"}
+      aria-label="Starburst topology alerts"
+      aria-live="polite"
+    >
+      <header>
+        <span className="starburst-mark" aria-hidden="true">✦</span>
+        <span>
+          <span className="section-label">Topology surveillance</span>
+          <strong>
+            {!snapshot
+              ? "Scanning for multi-hop funnels"
+              : patterns.length > 0
+                ? `${patterns.length} starburst ${patterns.length === 1 ? "pattern" : "patterns"} detected`
+                : "No starburst pattern detected"}
+          </strong>
+        </span>
+        <small>
+          {snapshot
+            ? `${snapshot.filters.lookback_hours}-hour graph window`
+            : "Awaiting Neo4j analysis"}
+        </small>
+      </header>
+      {patterns.length > 0 && (
+        <div className="starburst-list">
+          {patterns.map((pattern) => {
+            const sinkVisible = visibleAccountIds.has(pattern.sink_account_id);
+            return (
+              <article key={pattern.id}>
+                <div>
+                  <strong title={pattern.sink_account_id}>{pattern.sink_account_id}</strong>
+                  <p>
+                    <b>{pattern.source_count}</b> source accounts funnel through{" "}
+                    <b>{pattern.intermediary_count}</b> intermediaries into one sink.
+                  </p>
+                  <small>
+                    {pattern.inbound_transfer_count + pattern.outbound_transfer_count} linked transfers · latest {formatTransactionTime(pattern.latest_transfer_at)}
+                  </small>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => onFocusSink(pattern)}
+                  disabled={!sinkVisible}
+                  title={sinkVisible ? "Inspect the destination account" : "Sink account is outside the current graph filters"}
+                >
+                  {sinkVisible ? "Focus sink" : "Outside view"}
+                </button>
+              </article>
+            );
+          })}
+        </div>
+      )}
+    </section>
+  );
+}
+
 function AccountDetails({
   node,
   nodes,
@@ -247,6 +316,7 @@ function AccountDetails({
 
 export default function App() {
   const [snapshot, setSnapshot] = useState<GraphSnapshot | null>(null);
+  const [starburstSnapshot, setStarburstSnapshot] = useState<StarburstSnapshot | null>(null);
   const [draftFilters, setDraftFilters] = useState(DEFAULT_FILTERS);
   const [appliedFilters, setAppliedFilters] = useState(DEFAULT_FILTERS);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
@@ -266,10 +336,14 @@ export default function App() {
     const controller = new AbortController();
     setStatus(hasSnapshot.current ? "refreshing" : "loading");
     setError("");
-    fetchGraphSnapshot(appliedFilters, controller.signal)
-      .then((nextSnapshot) => {
+    Promise.all([
+      fetchGraphSnapshot(appliedFilters, controller.signal),
+      fetchStarburstPatterns(controller.signal),
+    ])
+      .then(([nextSnapshot, nextStarburstSnapshot]) => {
         hasSnapshot.current = true;
         setSnapshot(nextSnapshot);
+        setStarburstSnapshot(nextStarburstSnapshot);
         setSelectedNodeId((current) => {
           if (current && nextSnapshot.nodes.some((node) => node.id === current)) return current;
           return highestRiskNode(nextSnapshot.nodes)?.id ?? null;
@@ -319,6 +393,10 @@ export default function App() {
   const graphView = useMemo(
     () => snapshot ? buildGraphView(snapshot, collapsedCommunityIds) : null,
     [collapsedCommunityIds, snapshot],
+  );
+  const visibleAccountIds = useMemo(
+    () => new Set(snapshot?.nodes.map((node) => node.id) ?? []),
+    [snapshot],
   );
   const selectedNode = snapshot?.nodes.find((node) => node.id === selectedNodeId) ?? null;
   const selectedEdges = snapshot?.edges.filter(
@@ -372,6 +450,17 @@ export default function App() {
   const expandAllCommunities = useCallback(() => {
     setCollapsedCommunityIds(new Set());
   }, []);
+
+  const focusStarburstSink = useCallback((pattern: StarburstPattern) => {
+    const sink = snapshot?.nodes.find(
+      (node) => node.id === pattern.sink_account_id,
+    );
+    if (!sink) return;
+    if (sink.community_id !== null) expandCommunity(sink.community_id);
+    selectNode(sink.id);
+    setAccountQuery(sink.label);
+    setSearchMessage(`Focused starburst sink ${sink.label}`);
+  }, [expandCommunity, selectNode, snapshot]);
 
   function applyFilters(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -430,6 +519,12 @@ export default function App() {
           <article><span>Detected communities</span><strong>{metricValue(metrics?.communityCount ?? 0)}</strong><small>Louvain groups</small></article>
           <article><span>Flagged transfers</span><strong>{metricValue(metrics?.flaggedTransferCount ?? 0)}</strong><small>With risk indicators</small></article>
         </section>
+
+        <StarburstAlerts
+          snapshot={starburstSnapshot}
+          visibleAccountIds={visibleAccountIds}
+          onFocusSink={focusStarburstSink}
+        />
 
         <form className="filter-bar" onSubmit={applyFilters}>
           <div className="filter-title"><span aria-hidden="true">⌁</span><strong>Graph filters</strong></div>

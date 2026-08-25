@@ -35,6 +35,31 @@ export interface GraphSnapshot {
   filters: GraphFilters;
 }
 
+export interface StarburstPattern {
+  id: string;
+  sink_account_id: string;
+  source_account_ids: string[];
+  intermediary_account_ids: string[];
+  source_count: number;
+  intermediary_count: number;
+  inbound_transfer_count: number;
+  outbound_transfer_count: number;
+  latest_transfer_at: string;
+}
+
+export interface StarburstFilters {
+  lookback_hours: number;
+  minimum_source_accounts: number;
+  minimum_intermediaries: number;
+  limit: number;
+}
+
+export interface StarburstSnapshot {
+  generated_at: string;
+  patterns: StarburstPattern[];
+  filters: StarburstFilters;
+}
+
 export interface GraphViewNode extends DashboardNode {
   kind: "account" | "community";
   member_count: number;

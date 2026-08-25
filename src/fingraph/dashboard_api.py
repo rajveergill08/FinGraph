@@ -20,6 +20,7 @@ from .graph_analytics import AnalyticsSettings
 _QUERY_FILES = {
     "health": "dashboard_health.cypher",
     "graph": "dashboard_graph.cypher",
+    "starbursts": "detect_starburst_patterns.cypher",
 }
 
 
@@ -92,6 +93,31 @@ class GraphSnapshot(BaseModel):
     nodes: list[DashboardNode]
     edges: list[DashboardEdge]
     filters: GraphFilters
+
+
+class StarburstPattern(BaseModel):
+    id: str
+    sink_account_id: str
+    source_account_ids: list[str]
+    intermediary_account_ids: list[str]
+    source_count: int = Field(ge=2)
+    intermediary_count: int = Field(ge=1)
+    inbound_transfer_count: int = Field(ge=1)
+    outbound_transfer_count: int = Field(ge=1)
+    latest_transfer_at: str
+
+
+class StarburstFilters(BaseModel):
+    lookback_hours: int
+    minimum_source_accounts: int
+    minimum_intermediaries: int
+    limit: int
+
+
+class StarburstSnapshot(BaseModel):
+    generated_at: datetime
+    patterns: list[StarburstPattern]
+    filters: StarburstFilters
 
 
 class HealthResponse(BaseModel):
@@ -170,6 +196,40 @@ class DashboardGraphRepository:
             ),
         )
 
+    def starburst_patterns(
+        self,
+        *,
+        lookback_hours: int = 24,
+        minimum_source_accounts: int = 10,
+        minimum_intermediaries: int = 2,
+        limit: int = 20,
+    ) -> StarburstSnapshot:
+        self._validate_starburst_filters(
+            lookback_hours=lookback_hours,
+            minimum_source_accounts=minimum_source_accounts,
+            minimum_intermediaries=minimum_intermediaries,
+            limit=limit,
+        )
+        records = self._execute(
+            "starbursts",
+            {
+                "lookback_hours": lookback_hours,
+                "minimum_source_accounts": minimum_source_accounts,
+                "minimum_intermediaries": minimum_intermediaries,
+                "limit": limit,
+            },
+        )
+        return StarburstSnapshot(
+            generated_at=datetime.now(timezone.utc),
+            patterns=[StarburstPattern.model_validate(record) for record in records],
+            filters=StarburstFilters(
+                lookback_hours=lookback_hours,
+                minimum_source_accounts=minimum_source_accounts,
+                minimum_intermediaries=minimum_intermediaries,
+                limit=limit,
+            ),
+        )
+
     def close(self) -> None:
         if self._driver is not None and self._owns_driver:
             self._driver.close()
@@ -202,6 +262,23 @@ class DashboardGraphRepository:
             raise ValueError("minimum_pagerank_score must be between 0 and 1.")
         if community_id is not None and community_id < 0:
             raise ValueError("community_id cannot be negative.")
+
+    @staticmethod
+    def _validate_starburst_filters(
+        *,
+        lookback_hours: int,
+        minimum_source_accounts: int,
+        minimum_intermediaries: int,
+        limit: int,
+    ) -> None:
+        if lookback_hours < 1 or lookback_hours > 720:
+            raise ValueError("lookback_hours must be between 1 and 720.")
+        if minimum_source_accounts < 2 or minimum_source_accounts > 1_000:
+            raise ValueError("minimum_source_accounts must be between 2 and 1000.")
+        if minimum_intermediaries < 1 or minimum_intermediaries > 100:
+            raise ValueError("minimum_intermediaries must be between 1 and 100.")
+        if limit < 1 or limit > 100:
+            raise ValueError("limit must be between 1 and 100.")
 
 
 def create_app(
@@ -270,6 +347,26 @@ def create_app(
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="The fraud-network snapshot is unavailable.",
+            ) from exc
+
+    @api.get("/api/patterns/starbursts", response_model=StarburstSnapshot)
+    def starburst_patterns(
+        lookback_hours: Annotated[int, Query(ge=1, le=720)] = 24,
+        minimum_source_accounts: Annotated[int, Query(ge=2, le=1_000)] = 10,
+        minimum_intermediaries: Annotated[int, Query(ge=1, le=100)] = 2,
+        limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    ) -> StarburstSnapshot:
+        try:
+            return graph_repository.starburst_patterns(
+                lookback_hours=lookback_hours,
+                minimum_source_accounts=minimum_source_accounts,
+                minimum_intermediaries=minimum_intermediaries,
+                limit=limit,
+            )
+        except Exception as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Starburst-pattern detection is unavailable.",
             ) from exc
 
     return api
