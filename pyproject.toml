@@ -33,6 +33,7 @@ fingraph-audit = "fingraph.pipeline_audit:main"
 fingraph-gds = "fingraph.gds_analytics:main"
 fingraph-pagerank = "fingraph.gds_centrality:main"
 fingraph-dashboard-api = "fingraph.dashboard_api:main"
+fingraph-alerts = "fingraph.alerting:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

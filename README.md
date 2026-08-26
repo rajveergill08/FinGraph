@@ -254,6 +254,26 @@ npm run dev
 Set `VITE_API_BASE_URL` before `npm run build` when the browser-facing API is
 not available at `http://localhost:8000`.
 
+## Run the Week 4 risk-alert rules engine
+
+Refresh the explainable account risk scores, then preview every account that
+meets the configured threshold without contacting an external service:
+
+```powershell
+fingraph-analytics --lookback-hours 24 --minimum-amount 100 `
+  --high-risk-country KY --high-risk-country IR
+python -m fingraph.alerting --dry-run
+```
+
+The bounded, read-only candidate query defaults to a graph risk score of 70 or
+higher. Configure `SLACK_WEBHOOK_URL` and/or the SMTP variables documented in
+`.env.example`, then run `python -m fingraph.alerting` without `--dry-run` to
+deliver the alerts. Delivery state is recorded per account and channel in the
+ignored `data/alert-state.json` file, suppressing repeat notifications for 24
+hours by default. Failed channels are reported without being marked as
+delivered, so a later run can retry them. No notification channel or secret is enabled in the
+repository.
+
 ## Verification
 
 ```powershell
@@ -263,12 +283,12 @@ python -m unittest discover -s tests -v
 
 The tests check simulator integrity, Kafka provisioning and payloads, stream
 validation, Neo4j upsert boundaries, circular-flow safeguards, risk-score
-parameters, weighted Louvain communities, weighted PageRank centrality, and
-the dashboard API contract. The `web` workspace separately verifies API filter
-routing, graph summaries, account matching, currency-safe transfer display,
-visibility-aware refresh scheduling, and community-collapse transformations
-with `npm test`, while `npm run build` performs the strict TypeScript production
-build.
+parameters, weighted Louvain communities, weighted PageRank centrality, the
+dashboard API contract, and cooldown-aware Slack/email alert delivery. The
+`web` workspace separately verifies API filter routing, graph summaries,
+account matching, currency-safe transfer display, visibility-aware refresh
+scheduling, and community-collapse transformations with `npm test`, while
+`npm run build` performs the strict TypeScript production build.
 
 ## Planned milestones
 
@@ -277,4 +297,5 @@ build.
 - **Week 3:** Neo4j Graph Data Science community and centrality scoring plus
   dashboard integration (analytics, read-only API, and interactive React/D3
   visualization foundation implemented).
-- **Week 4:** alert automation and investigation-dashboard refinement.
+- **Week 4:** threshold-based Slack/email alert rules with cooldown suppression
+  implemented; automated polling and investigation-dashboard refinement remain.
