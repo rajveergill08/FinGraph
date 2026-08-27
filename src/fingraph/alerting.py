@@ -3,18 +3,20 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 import json
 import os
 from pathlib import Path
+import signal
 import smtplib
+from threading import Event
 from typing import Any, Callable, Protocol, Sequence
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
-from .graph_analytics import AnalyticsSettings
+from .graph_analytics import AnalyticsSettings, GraphAnalyticsRunner
 
 
 _QUERY_PATH = Path(__file__).parents[2] / "neo4j" / "find_alert_candidates.cypher"
@@ -42,6 +44,11 @@ class AlertSettings:
     risk_threshold: float = 70.0
     candidate_limit: int = 100
     cooldown_hours: float = 24.0
+    poll_interval_seconds: float = 60.0
+    risk_lookback_hours: int = 24
+    high_risk_countries: tuple[str, ...] = ()
+    risk_volume_unit: float = 10_000.0
+    dry_run: bool = False
     state_path: Path = Path("data/alert-state.json")
     slack_webhook_url: str | None = None
     smtp_host: str | None = None
@@ -60,6 +67,15 @@ class AlertSettings:
             for address in os.getenv("ALERT_EMAIL_TO", "").split(",")
             if address.strip()
         )
+        countries = tuple(
+            sorted(
+                {
+                    country.strip().upper()
+                    for country in os.getenv("ALERT_HIGH_RISK_COUNTRIES", "").split(",")
+                    if country.strip()
+                }
+            )
+        )
         settings = cls(
             risk_threshold=float(
                 os.getenv("ALERT_RISK_THRESHOLD", defaults.risk_threshold)
@@ -70,6 +86,19 @@ class AlertSettings:
             cooldown_hours=float(
                 os.getenv("ALERT_COOLDOWN_HOURS", defaults.cooldown_hours)
             ),
+            poll_interval_seconds=float(
+                os.getenv(
+                    "ALERT_POLL_INTERVAL_SECONDS", defaults.poll_interval_seconds
+                )
+            ),
+            risk_lookback_hours=int(
+                os.getenv("ALERT_RISK_LOOKBACK_HOURS", defaults.risk_lookback_hours)
+            ),
+            high_risk_countries=countries,
+            risk_volume_unit=float(
+                os.getenv("ALERT_RISK_VOLUME_UNIT", defaults.risk_volume_unit)
+            ),
+            dry_run=_environment_bool("ALERT_DRY_RUN", defaults.dry_run),
             state_path=Path(os.getenv("ALERT_STATE_PATH", str(defaults.state_path))),
             slack_webhook_url=os.getenv("SLACK_WEBHOOK_URL") or None,
             smtp_host=os.getenv("SMTP_HOST") or None,
@@ -90,6 +119,21 @@ class AlertSettings:
             raise ValueError("ALERT_CANDIDATE_LIMIT must be between 1 and 1000.")
         if self.cooldown_hours < 0 or self.cooldown_hours > 8_760:
             raise ValueError("ALERT_COOLDOWN_HOURS must be between 0 and 8760.")
+        if self.poll_interval_seconds < 1 or self.poll_interval_seconds > 86_400:
+            raise ValueError(
+                "ALERT_POLL_INTERVAL_SECONDS must be between 1 and 86400."
+            )
+        if self.risk_lookback_hours < 1 or self.risk_lookback_hours > 720:
+            raise ValueError("ALERT_RISK_LOOKBACK_HOURS must be between 1 and 720.")
+        if self.risk_volume_unit <= 0:
+            raise ValueError("ALERT_RISK_VOLUME_UNIT must be positive.")
+        if any(
+            len(country) != 2 or not country.isalpha()
+            for country in self.high_risk_countries
+        ):
+            raise ValueError(
+                "ALERT_HIGH_RISK_COUNTRIES must contain two-letter ISO country codes."
+            )
         if self.smtp_port < 1 or self.smtp_port > 65_535:
             raise ValueError("SMTP_PORT must be between 1 and 65535.")
         if self.slack_webhook_url:
@@ -478,6 +522,81 @@ class AlertEngine:
         )
 
 
+def _emit_json(payload: dict[str, Any]) -> None:
+    print(json.dumps(payload, default=str, sort_keys=True), flush=True)
+
+
+class AlertWorker:
+    """Refresh risk scores and evaluate alerts once or on a fixed interval."""
+
+    def __init__(
+        self,
+        alert_engine: AlertEngine,
+        risk_refresher: GraphAnalyticsRunner,
+        settings: AlertSettings,
+        *,
+        stop_event: Event | None = None,
+        emit: Callable[[dict[str, Any]], None] = _emit_json,
+        now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+    ) -> None:
+        settings.validate()
+        self.alert_engine = alert_engine
+        self.risk_refresher = risk_refresher
+        self.settings = settings
+        self.stop_event = stop_event or Event()
+        self._emit = emit
+        self._now = now
+
+    def run(self, *, watch: bool = False, max_cycles: int | None = None) -> int:
+        """Run alert cycles, retrying later when a watched cycle fails."""
+        if max_cycles is not None and max_cycles < 1:
+            raise ValueError("max_cycles must be at least one when provided.")
+
+        cycle = 0
+        last_exit_code = 0
+        while not self.stop_event.is_set():
+            cycle += 1
+            generated_at = self._now()
+            try:
+                risk_scores = self.risk_refresher.refresh_risk_scores(
+                    lookback_hours=self.settings.risk_lookback_hours,
+                    high_risk_countries=self.settings.high_risk_countries,
+                    volume_unit=self.settings.risk_volume_unit,
+                )
+                summary = self.alert_engine.run(
+                    threshold=self.settings.risk_threshold,
+                    limit=self.settings.candidate_limit,
+                    cooldown_hours=self.settings.cooldown_hours,
+                    dry_run=self.settings.dry_run,
+                )
+                last_exit_code = 1 if summary.errors else 0
+                self._emit(
+                    {
+                        "status": "partial_failure" if summary.errors else "ok",
+                        "cycle": cycle,
+                        "generated_at": generated_at.isoformat(),
+                        "risk_scores_updated": len(risk_scores),
+                        "alerts": summary.as_dict(),
+                    }
+                )
+            except Exception as exc:
+                last_exit_code = 1
+                self._emit(
+                    {
+                        "status": "error",
+                        "cycle": cycle,
+                        "generated_at": generated_at.isoformat(),
+                        "error": str(exc),
+                    }
+                )
+
+            if not watch or (max_cycles is not None and cycle >= max_cycles):
+                break
+            if self.stop_event.wait(self.settings.poll_interval_seconds):
+                break
+        return last_exit_code
+
+
 def build_sinks(settings: AlertSettings) -> list[NotificationSink]:
     sinks: list[NotificationSink] = []
     if settings.slack_webhook_url:
@@ -504,7 +623,20 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--risk-threshold", type=float)
     parser.add_argument("--limit", type=int)
     parser.add_argument("--cooldown-hours", type=float)
+    parser.add_argument("--poll-interval-seconds", type=float)
+    parser.add_argument("--risk-lookback-hours", type=int)
+    parser.add_argument("--risk-volume-unit", type=float)
+    parser.add_argument(
+        "--high-risk-country",
+        action="append",
+        help="Two-letter ISO country code; repeat for multiple countries.",
+    )
     parser.add_argument("--state-path", type=Path)
+    parser.add_argument(
+        "--watch",
+        action="store_true",
+        help="Continue polling until SIGINT or SIGTERM instead of running once.",
+    )
     parser.add_argument(
         "--dry-run",
         action="store_true",
@@ -516,38 +648,81 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     settings = AlertSettings.from_environment()
-    threshold = (
-        settings.risk_threshold if args.risk_threshold is None else args.risk_threshold
+    countries = (
+        settings.high_risk_countries
+        if args.high_risk_country is None
+        else tuple(sorted({country.strip().upper() for country in args.high_risk_country}))
     )
-    limit = settings.candidate_limit if args.limit is None else args.limit
-    cooldown_hours = (
-        settings.cooldown_hours if args.cooldown_hours is None else args.cooldown_hours
+    settings = replace(
+        settings,
+        risk_threshold=(
+            settings.risk_threshold
+            if args.risk_threshold is None
+            else args.risk_threshold
+        ),
+        candidate_limit=(
+            settings.candidate_limit if args.limit is None else args.limit
+        ),
+        cooldown_hours=(
+            settings.cooldown_hours
+            if args.cooldown_hours is None
+            else args.cooldown_hours
+        ),
+        poll_interval_seconds=(
+            settings.poll_interval_seconds
+            if args.poll_interval_seconds is None
+            else args.poll_interval_seconds
+        ),
+        risk_lookback_hours=(
+            settings.risk_lookback_hours
+            if args.risk_lookback_hours is None
+            else args.risk_lookback_hours
+        ),
+        high_risk_countries=countries,
+        risk_volume_unit=(
+            settings.risk_volume_unit
+            if args.risk_volume_unit is None
+            else args.risk_volume_unit
+        ),
+        dry_run=settings.dry_run or args.dry_run,
+        state_path=args.state_path or settings.state_path,
     )
-    if threshold < 0 or threshold > 100:
-        raise ValueError("risk threshold must be between 0 and 100.")
-    if limit < 1 or limit > 1_000:
-        raise ValueError("limit must be between 1 and 1000.")
-    if cooldown_hours < 0 or cooldown_hours > 8_760:
-        raise ValueError("cooldown hours must be between 0 and 8760.")
+    settings.validate()
 
     repository = HighRiskAccountRepository()
+    risk_refresher = GraphAnalyticsRunner()
+    sinks = build_sinks(settings)
+    if not settings.dry_run and not sinks:
+        raise ValueError(
+            "No alert channel is configured. Set Slack/email variables or use --dry-run."
+        )
+    stop_event = Event()
+
+    def request_stop(_signum: int, _frame: Any) -> None:
+        stop_event.set()
+
+    if args.watch:
+        signal.signal(signal.SIGINT, request_stop)
+        signal.signal(signal.SIGTERM, request_stop)
+
     try:
         repository.open()
-        summary = AlertEngine(
-            repository,
-            build_sinks(settings),
-            JsonAlertStateStore(args.state_path or settings.state_path),
+        risk_refresher.open()
+        return AlertWorker(
+            AlertEngine(
+                repository,
+                sinks,
+                JsonAlertStateStore(settings.state_path),
+            ),
+            risk_refresher,
+            settings,
+            stop_event=stop_event,
         ).run(
-            threshold=threshold,
-            limit=limit,
-            cooldown_hours=cooldown_hours,
-            dry_run=args.dry_run,
+            watch=args.watch,
         )
     finally:
+        risk_refresher.close()
         repository.close()
-
-    print(json.dumps(summary.as_dict(), default=str, sort_keys=True))
-    return 1 if summary.errors else 0
 
 
 if __name__ == "__main__":

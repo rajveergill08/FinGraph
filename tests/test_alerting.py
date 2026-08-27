@@ -5,10 +5,13 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import MagicMock, Mock
+from unittest.mock import MagicMock, Mock, patch
 
 from fingraph.alerting import (
     AlertEngine,
+    AlertRunSummary,
+    AlertSettings,
+    AlertWorker,
     EmailSink,
     HighRiskAccountRepository,
     JsonAlertStateStore,
@@ -220,6 +223,107 @@ class AlertingTests(unittest.TestCase):
         self.assertIn("Graph risk score: 87.50/100", message)
         self.assertIn("Transactions: 55", message)
         self.assertIn("Counterparties: 5", message)
+
+    @patch.dict(
+        "os.environ",
+        {
+            "ALERT_POLL_INTERVAL_SECONDS": "30",
+            "ALERT_RISK_LOOKBACK_HOURS": "48",
+            "ALERT_HIGH_RISK_COUNTRIES": "ky, IR,ky",
+            "ALERT_RISK_VOLUME_UNIT": "5000",
+            "ALERT_DRY_RUN": "true",
+        },
+        clear=True,
+    )
+    def test_worker_settings_are_loaded_and_normalised_from_environment(self):
+        settings = AlertSettings.from_environment()
+
+        self.assertEqual(settings.poll_interval_seconds, 30)
+        self.assertEqual(settings.risk_lookback_hours, 48)
+        self.assertEqual(settings.high_risk_countries, ("IR", "KY"))
+        self.assertEqual(settings.risk_volume_unit, 5000)
+        self.assertTrue(settings.dry_run)
+
+    def test_worker_refreshes_scores_before_evaluating_alerts(self):
+        refresher = Mock()
+        refresher.refresh_risk_scores.return_value = [{"account_id": "account-a"}]
+        engine = Mock(spec=AlertEngine)
+        engine.run.return_value = AlertRunSummary(
+            threshold=70,
+            candidate_count=1,
+            delivered_count=0,
+            suppressed_count=0,
+            dry_run=True,
+            channels=(),
+            candidates=(_alert(),),
+            errors=(),
+        )
+        emitted = []
+        generated_at = datetime(2026, 8, 27, 10, 0, tzinfo=timezone.utc)
+        settings = AlertSettings(
+            risk_lookback_hours=48,
+            high_risk_countries=("IR", "KY"),
+            risk_volume_unit=5_000,
+            dry_run=True,
+        )
+
+        exit_code = AlertWorker(
+            engine,
+            refresher,
+            settings,
+            emit=emitted.append,
+            now=lambda: generated_at,
+        ).run()
+
+        self.assertEqual(exit_code, 0)
+        refresher.refresh_risk_scores.assert_called_once_with(
+            lookback_hours=48,
+            high_risk_countries=("IR", "KY"),
+            volume_unit=5_000,
+        )
+        engine.run.assert_called_once_with(
+            threshold=70,
+            limit=100,
+            cooldown_hours=24,
+            dry_run=True,
+        )
+        self.assertEqual(emitted[0]["status"], "ok")
+        self.assertEqual(emitted[0]["risk_scores_updated"], 1)
+
+    def test_watched_worker_reports_failure_then_retries_next_cycle(self):
+        refresher = Mock()
+        refresher.refresh_risk_scores.side_effect = [
+            RuntimeError("Neo4j temporarily unavailable"),
+            [],
+        ]
+        engine = Mock(spec=AlertEngine)
+        engine.run.return_value = AlertRunSummary(
+            threshold=70,
+            candidate_count=0,
+            delivered_count=0,
+            suppressed_count=0,
+            dry_run=True,
+            channels=(),
+            candidates=(),
+            errors=(),
+        )
+        stop_event = Mock()
+        stop_event.is_set.return_value = False
+        stop_event.wait.return_value = False
+        emitted = []
+
+        exit_code = AlertWorker(
+            engine,
+            refresher,
+            AlertSettings(poll_interval_seconds=5, dry_run=True),
+            stop_event=stop_event,
+            emit=emitted.append,
+        ).run(watch=True, max_cycles=2)
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual([payload["status"] for payload in emitted], ["error", "ok"])
+        stop_event.wait.assert_called_once_with(5)
+        engine.run.assert_called_once()
 
 
 if __name__ == "__main__":

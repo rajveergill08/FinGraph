@@ -108,5 +108,39 @@ services:
       retries: 12
     restart: unless-stopped
 
+  alert-worker:
+    profiles: ["alerts"]
+    build:
+      context: .
+      dockerfile: Dockerfile.alerts
+    depends_on:
+      neo4j:
+        condition: service_healthy
+    environment:
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USERNAME: neo4j
+      NEO4J_PASSWORD: change-me-now
+      ALERT_RISK_THRESHOLD: ${ALERT_RISK_THRESHOLD:-70}
+      ALERT_CANDIDATE_LIMIT: ${ALERT_CANDIDATE_LIMIT:-100}
+      ALERT_COOLDOWN_HOURS: ${ALERT_COOLDOWN_HOURS:-24}
+      ALERT_POLL_INTERVAL_SECONDS: ${ALERT_POLL_INTERVAL_SECONDS:-60}
+      ALERT_RISK_LOOKBACK_HOURS: ${ALERT_RISK_LOOKBACK_HOURS:-24}
+      ALERT_HIGH_RISK_COUNTRIES: ${ALERT_HIGH_RISK_COUNTRIES:-KY,IR}
+      ALERT_RISK_VOLUME_UNIT: ${ALERT_RISK_VOLUME_UNIT:-10000}
+      ALERT_DRY_RUN: ${ALERT_DRY_RUN:-true}
+      ALERT_STATE_PATH: /app/data/alert-state.json
+      SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_USE_TLS: ${SMTP_USE_TLS:-true}
+      ALERT_EMAIL_FROM: ${ALERT_EMAIL_FROM:-}
+      ALERT_EMAIL_TO: ${ALERT_EMAIL_TO:-}
+    volumes:
+      - alert_state:/app/data
+    restart: unless-stopped
+
 volumes:
   neo4j_data:
+  alert_state:
