@@ -60,6 +60,36 @@ export interface StarburstSnapshot {
   filters: StarburstFilters;
 }
 
+export interface AlertDeliveryStatus {
+  channel: string;
+  graph_risk_score: number;
+  delivered_at: string;
+}
+
+export interface AlertCandidateStatus {
+  account_id: string;
+  graph_risk_score: number;
+  risk_tier: string | null;
+  country: string | null;
+  pagerank_score: number;
+  community_id: number | null;
+  transaction_count: number;
+  counterparty_count: number;
+  latest_transfer_at: string | null;
+  deliveries: AlertDeliveryStatus[];
+}
+
+export interface AlertStatusFilters {
+  minimum_risk_score: number;
+  limit: number;
+}
+
+export interface AlertStatusSnapshot {
+  generated_at: string;
+  candidates: AlertCandidateStatus[];
+  filters: AlertStatusFilters;
+}
+
 export interface GraphViewNode extends DashboardNode {
   kind: "account" | "community";
   member_count: number;

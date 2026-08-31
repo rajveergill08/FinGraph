@@ -82,6 +82,9 @@ services:
       NEO4J_USERNAME: neo4j
       NEO4J_PASSWORD: change-me-now
       DASHBOARD_ALLOWED_ORIGINS: ${DASHBOARD_ALLOWED_ORIGINS:-http://localhost:5173}
+      ALERT_STATE_PATH: /app/data/alert-state.json
+    volumes:
+      - alert_state:/app/data:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)"]
       interval: 10s

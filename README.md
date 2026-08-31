@@ -213,6 +213,12 @@ multiple intermediaries into one destination. The bounded query uses topology
 and transfer time order rather than trusting simulator syndicate labels. Its
 lookback, source, intermediary, and result thresholds are validated by the API.
 
+`GET /api/alerts` returns the current accounts meeting the automated risk rule
+and combines them with the latest recorded delivery per notification channel.
+The endpoint defaults to a risk score of 70, accepts bounded
+`minimum_risk_score` and `limit` parameters, and exposes no webhook, SMTP, or
+Neo4j credentials.
+
 ### Explore the React/D3 fraud network
 
 The analyst workspace renders the API snapshot as a directed, force-positioned
@@ -235,6 +241,9 @@ Selecting a community summary node expands its member accounts again.
 Starburst surveillance refreshes with the graph, shows the number of sources,
 intermediaries, and linked transfers for every detected funnel, and lets the
 analyst focus its destination account when it is present in the current view.
+The automated-response panel refreshes on the same schedule, surfaces every
+high-risk rule candidate, distinguishes recorded Slack/email delivery from
+preview or unconfigured operation, and can focus visible candidate accounts.
 
 Run the dashboard API and frontend together:
 
@@ -283,7 +292,9 @@ docker compose logs --follow alert-worker
 The worker recalculates risk scores before every alert cycle, polls every 60
 seconds, survives temporary Neo4j or delivery failures, and exits cleanly on
 `SIGINT` or `SIGTERM`. Docker persists cooldown state in the `alert_state`
-volume. Docker Compose reads these values from the local `.env` file.
+volume and mounts it read-only in the dashboard API so analysts can see the
+latest per-channel delivery status. Docker Compose reads these values from the
+local `.env` file.
 `ALERT_DRY_RUN` defaults to `true`; set it to `false` only after a Slack webhook
 or complete SMTP configuration has been added.
 
@@ -297,7 +308,8 @@ python -m unittest discover -s tests -v
 The tests check simulator integrity, Kafka provisioning and payloads, stream
 validation, Neo4j upsert boundaries, circular-flow safeguards, risk-score
 parameters, weighted Louvain communities, weighted PageRank centrality, the
-dashboard API contract, and cooldown-aware Slack/email alert delivery. The
+dashboard API contract, alert-status shaping, and cooldown-aware Slack/email
+alert delivery. The
 `web` workspace separately verifies API filter routing, graph summaries,
 account matching, currency-safe transfer display, visibility-aware refresh
 scheduling, and community-collapse transformations with `npm test`, while
@@ -312,4 +324,5 @@ scheduling, and community-collapse transformations with `npm test`, while
   visualization foundation implemented).
 - **Week 4:** continuously polling Slack/email alert rules with fresh risk
   scoring, cooldown suppression, failure retry, and persistent Docker state
-  implemented; investigation-dashboard refinement remains.
+  plus dashboard delivery-status integration implemented; final
+  investigation workflow refinement remains.

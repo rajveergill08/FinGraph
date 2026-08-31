@@ -1,13 +1,20 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import json
 import os
+from pathlib import Path
+import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
 from fastapi.testclient import TestClient
 
 from fingraph.dashboard_api import (
+    AlertCandidateStatus,
+    AlertDeliveryStatus,
+    AlertStatusFilters,
+    AlertStatusSnapshot,
     DashboardGraphRepository,
     DashboardNode,
     GraphFilters,
@@ -101,6 +108,33 @@ def _starburst_snapshot() -> StarburstSnapshot:
     )
 
 
+def _alert_status_snapshot() -> AlertStatusSnapshot:
+    return AlertStatusSnapshot(
+        generated_at=datetime.now(timezone.utc),
+        candidates=[
+            AlertCandidateStatus(
+                account_id="account-shell-001",
+                graph_risk_score=92.5,
+                risk_tier="critical",
+                country="KY",
+                pagerank_score=0.91,
+                community_id=7,
+                transaction_count=55,
+                counterparty_count=50,
+                latest_transfer_at="2026-08-30T12:00:00Z",
+                deliveries=[
+                    AlertDeliveryStatus(
+                        channel="slack",
+                        graph_risk_score=91.0,
+                        delivered_at=datetime(2026, 8, 30, 12, 1, tzinfo=timezone.utc),
+                    )
+                ],
+            )
+        ],
+        filters=AlertStatusFilters(minimum_risk_score=70.0, limit=100),
+    )
+
+
 class DashboardApiTests(unittest.TestCase):
     def test_graph_query_is_bounded_parameterised_and_read_only(self):
         query = load_query("graph")
@@ -121,6 +155,15 @@ class DashboardApiTests(unittest.TestCase):
         self.assertIn("$lookback_hours", query)
         self.assertIn("$minimum_source_accounts", query)
         self.assertIn("$minimum_intermediaries", query)
+        self.assertIn("LIMIT $limit", query)
+        self.assertNotIn("CREATE ", query.upper())
+        self.assertNotIn(" SET ", query.upper())
+        self.assertNotIn("DELETE ", query.upper())
+
+    def test_alert_query_is_bounded_parameterised_and_read_only(self):
+        query = load_query("alert_candidates")
+
+        self.assertIn("$minimum_risk_score", query)
         self.assertIn("LIMIT $limit", query)
         self.assertNotIn("CREATE ", query.upper())
         self.assertNotIn(" SET ", query.upper())
@@ -184,11 +227,65 @@ class DashboardApiTests(unittest.TestCase):
         self.assertEqual(call.kwargs["parameters_"]["minimum_intermediaries"], 3)
         self.assertEqual(call.kwargs["parameters_"]["limit"], 5)
 
+    def test_repository_combines_alert_candidates_with_delivery_state(self):
+        driver = Mock()
+        driver.execute_query.return_value = _result(
+            {
+                "account_id": "account-shell-001",
+                "graph_risk_score": 92.5,
+                "risk_tier": "critical",
+                "country": "KY",
+                "pagerank_score": 0.91,
+                "community_id": 7,
+                "transaction_count": 55,
+                "counterparty_count": 50,
+                "latest_transfer_at": "2026-08-30T12:00:00Z",
+            }
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            state_path = Path(directory) / "alert-state.json"
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "deliveries": {
+                            "high-risk-account:slack:account-shell-001": {
+                                "account_id": "account-shell-001",
+                                "channel": "slack",
+                                "graph_risk_score": 91.0,
+                                "delivered_at": "2026-08-30T12:01:00+00:00",
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            repository = DashboardGraphRepository(
+                driver=driver,
+                alert_state_path=state_path,
+            )
+
+            snapshot = repository.alert_status(
+                minimum_risk_score=75.0,
+                limit=25,
+            )
+
+        self.assertEqual(snapshot.candidates[0].account_id, "account-shell-001")
+        self.assertEqual(snapshot.candidates[0].deliveries[0].channel, "slack")
+        self.assertEqual(snapshot.filters.minimum_risk_score, 75.0)
+        call = driver.execute_query.call_args
+        self.assertEqual(call.kwargs["routing_"], "r")
+        self.assertEqual(
+            call.kwargs["parameters_"],
+            {"minimum_risk_score": 75.0, "limit": 25},
+        )
+
     def test_health_and_graph_endpoints_return_typed_payloads_with_cors(self):
         repository = Mock(spec=DashboardGraphRepository)
         repository.health.return_value = True
         repository.graph_snapshot.return_value = _snapshot()
         repository.starburst_patterns.return_value = _starburst_snapshot()
+        repository.alert_status.return_value = _alert_status_snapshot()
         api = create_app(
             repository,
             allowed_origins=("http://localhost:5173",),
@@ -200,6 +297,7 @@ class DashboardApiTests(unittest.TestCase):
             )
             graph = client.get("/api/graph")
             starbursts = client.get("/api/patterns/starbursts")
+            alerts = client.get("/api/alerts")
 
         self.assertEqual(health.status_code, 200)
         self.assertEqual(health.json(), {"status": "ok", "neo4j": "connected"})
@@ -213,6 +311,9 @@ class DashboardApiTests(unittest.TestCase):
             starbursts.json()["patterns"][0]["sink_account_id"],
             "account-shell-001",
         )
+        self.assertEqual(alerts.status_code, 200)
+        self.assertEqual(alerts.json()["candidates"][0]["account_id"], "account-shell-001")
+        self.assertEqual(alerts.json()["candidates"][0]["deliveries"][0]["channel"], "slack")
         repository.graph_snapshot.assert_called_once_with(
             edge_limit=200,
             minimum_risk_score=0.0,
@@ -224,6 +325,10 @@ class DashboardApiTests(unittest.TestCase):
             minimum_source_accounts=10,
             minimum_intermediaries=2,
             limit=20,
+        )
+        repository.alert_status.assert_called_once_with(
+            minimum_risk_score=70.0,
+            limit=100,
         )
 
     def test_invalid_filters_are_rejected_before_query_execution(self):
@@ -243,6 +348,12 @@ class DashboardApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 422)
         repository.starburst_patterns.assert_not_called()
+
+        with TestClient(api) as client:
+            response = client.get("/api/alerts?minimum_risk_score=101")
+
+        self.assertEqual(response.status_code, 422)
+        repository.alert_status.assert_not_called()
 
     def test_database_failure_is_reported_as_service_unavailable(self):
         repository = Mock(spec=DashboardGraphRepository)

@@ -6,7 +6,11 @@ import {
   useState,
   type FormEvent,
 } from "react";
-import { fetchGraphSnapshot, fetchStarburstPatterns } from "./api";
+import {
+  fetchAlertStatus,
+  fetchGraphSnapshot,
+  fetchStarburstPatterns,
+} from "./api";
 import {
   buildGraphView,
   deriveDashboardMetrics,
@@ -19,6 +23,7 @@ import {
 import NetworkGraph from "./NetworkGraph";
 import { AUTO_REFRESH_MS, startAutoRefresh } from "./refresh";
 import type {
+  AlertStatusSnapshot,
   CommunitySummary,
   DashboardEdge,
   DashboardNode,
@@ -218,6 +223,82 @@ function StarburstAlerts({
   );
 }
 
+function AlertStatusPanel({
+  snapshot,
+  visibleAccountIds,
+  onFocusAccount,
+}: {
+  snapshot: AlertStatusSnapshot | null;
+  visibleAccountIds: ReadonlySet<string>;
+  onFocusAccount: (accountId: string) => void;
+}) {
+  const candidates = snapshot?.candidates ?? [];
+  const deliveredAccounts = candidates.filter(
+    (candidate) => candidate.deliveries.length > 0,
+  ).length;
+  return (
+    <section
+      className={candidates.length > 0 ? "alert-status active" : "alert-status"}
+      aria-label="Automated risk alert status"
+      aria-live="polite"
+    >
+      <header>
+        <span className="alert-status-mark" aria-hidden="true">!</span>
+        <span>
+          <span className="section-label">Automated response</span>
+          <strong>
+            {!snapshot
+              ? "Evaluating high-risk account rules"
+              : candidates.length > 0
+                ? `${candidates.length} ${candidates.length === 1 ? "account meets" : "accounts meet"} the alert rule`
+                : "No account meets the alert rule"}
+          </strong>
+        </span>
+        <small>
+          {snapshot
+            ? `Risk ≥ ${snapshot.filters.minimum_risk_score} · ${deliveredAccounts} with recorded delivery`
+            : "Awaiting rules engine status"}
+        </small>
+      </header>
+      {candidates.length > 0 && (
+        <div className="alert-status-list">
+          {candidates.slice(0, 6).map((candidate) => {
+            const accountVisible = visibleAccountIds.has(candidate.account_id);
+            const latestDelivery = candidate.deliveries[0] ?? null;
+            return (
+              <article key={candidate.account_id}>
+                <div className="alert-score">
+                  <strong>{candidate.graph_risk_score.toFixed(1)}</strong>
+                  <small>risk score</small>
+                </div>
+                <div>
+                  <strong title={candidate.account_id}>{candidate.account_id}</strong>
+                  <p>
+                    {candidate.risk_tier ?? "Unknown tier"} · {candidate.country ?? "Unknown country"} · {candidate.counterparty_count} counterparties
+                  </p>
+                  <small>
+                    {latestDelivery
+                      ? `${latestDelivery.channel} delivered ${formatTransactionTime(latestDelivery.delivered_at)}`
+                      : "No delivery recorded — preview mode or channel not configured"}
+                  </small>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => onFocusAccount(candidate.account_id)}
+                  disabled={!accountVisible}
+                  title={accountVisible ? "Inspect this high-risk account" : "Account is outside the current graph filters"}
+                >
+                  {accountVisible ? "Inspect" : "Outside view"}
+                </button>
+              </article>
+            );
+          })}
+        </div>
+      )}
+    </section>
+  );
+}
+
 function AccountDetails({
   node,
   nodes,
@@ -317,6 +398,7 @@ function AccountDetails({
 export default function App() {
   const [snapshot, setSnapshot] = useState<GraphSnapshot | null>(null);
   const [starburstSnapshot, setStarburstSnapshot] = useState<StarburstSnapshot | null>(null);
+  const [alertStatusSnapshot, setAlertStatusSnapshot] = useState<AlertStatusSnapshot | null>(null);
   const [draftFilters, setDraftFilters] = useState(DEFAULT_FILTERS);
   const [appliedFilters, setAppliedFilters] = useState(DEFAULT_FILTERS);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
@@ -339,11 +421,13 @@ export default function App() {
     Promise.all([
       fetchGraphSnapshot(appliedFilters, controller.signal),
       fetchStarburstPatterns(controller.signal),
+      fetchAlertStatus(controller.signal),
     ])
-      .then(([nextSnapshot, nextStarburstSnapshot]) => {
+      .then(([nextSnapshot, nextStarburstSnapshot, nextAlertStatusSnapshot]) => {
         hasSnapshot.current = true;
         setSnapshot(nextSnapshot);
         setStarburstSnapshot(nextStarburstSnapshot);
+        setAlertStatusSnapshot(nextAlertStatusSnapshot);
         setSelectedNodeId((current) => {
           if (current && nextSnapshot.nodes.some((node) => node.id === current)) return current;
           return highestRiskNode(nextSnapshot.nodes)?.id ?? null;
@@ -462,6 +546,15 @@ export default function App() {
     setSearchMessage(`Focused starburst sink ${sink.label}`);
   }, [expandCommunity, selectNode, snapshot]);
 
+  const focusAlertAccount = useCallback((accountId: string) => {
+    const account = snapshot?.nodes.find((node) => node.id === accountId);
+    if (!account) return;
+    if (account.community_id !== null) expandCommunity(account.community_id);
+    selectNode(account.id);
+    setAccountQuery(account.label);
+    setSearchMessage(`Focused alert candidate ${account.label}`);
+  }, [expandCommunity, selectNode, snapshot]);
+
   function applyFilters(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setSelectedEdgeId(null);
@@ -524,6 +617,12 @@ export default function App() {
           snapshot={starburstSnapshot}
           visibleAccountIds={visibleAccountIds}
           onFocusSink={focusStarburstSink}
+        />
+
+        <AlertStatusPanel
+          snapshot={alertStatusSnapshot}
+          visibleAccountIds={visibleAccountIds}
+          onFocusAccount={focusAlertAccount}
         />
 
         <form className="filter-bar" onSubmit={applyFilters}>

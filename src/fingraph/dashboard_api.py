@@ -14,6 +14,7 @@ from fastapi import FastAPI, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
+from .alerting import JsonAlertStateStore
 from .graph_analytics import AnalyticsSettings
 
 
@@ -21,6 +22,7 @@ _QUERY_FILES = {
     "health": "dashboard_health.cypher",
     "graph": "dashboard_graph.cypher",
     "starbursts": "detect_starburst_patterns.cypher",
+    "alert_candidates": "find_alert_candidates.cypher",
 }
 
 
@@ -120,6 +122,36 @@ class StarburstSnapshot(BaseModel):
     filters: StarburstFilters
 
 
+class AlertDeliveryStatus(BaseModel):
+    channel: str
+    graph_risk_score: float = Field(ge=0.0, le=100.0)
+    delivered_at: datetime
+
+
+class AlertCandidateStatus(BaseModel):
+    account_id: str
+    graph_risk_score: float = Field(ge=0.0, le=100.0)
+    risk_tier: str | None = None
+    country: str | None = None
+    pagerank_score: float = Field(default=0.0, ge=0.0)
+    community_id: int | None = None
+    transaction_count: int = Field(default=0, ge=0)
+    counterparty_count: int = Field(default=0, ge=0)
+    latest_transfer_at: str | None = None
+    deliveries: list[AlertDeliveryStatus] = Field(default_factory=list)
+
+
+class AlertStatusFilters(BaseModel):
+    minimum_risk_score: float
+    limit: int
+
+
+class AlertStatusSnapshot(BaseModel):
+    generated_at: datetime
+    candidates: list[AlertCandidateStatus]
+    filters: AlertStatusFilters
+
+
 class HealthResponse(BaseModel):
     status: str
     neo4j: str
@@ -133,10 +165,15 @@ class DashboardGraphRepository:
         settings: AnalyticsSettings | None = None,
         *,
         driver: Any = None,
+        alert_state_path: Path | None = None,
     ) -> None:
         self.settings = settings or AnalyticsSettings.from_environment()
         self._driver = driver
         self._owns_driver = driver is None
+        self._alert_state_store = JsonAlertStateStore(
+            alert_state_path
+            or Path(os.getenv("ALERT_STATE_PATH", "data/alert-state.json"))
+        )
 
     def open(self) -> None:
         if self._driver is not None:
@@ -230,6 +267,54 @@ class DashboardGraphRepository:
             ),
         )
 
+    def alert_status(
+        self,
+        *,
+        minimum_risk_score: float = 70.0,
+        limit: int = 100,
+    ) -> AlertStatusSnapshot:
+        self._validate_alert_filters(
+            minimum_risk_score=minimum_risk_score,
+            limit=limit,
+        )
+        records = self._execute(
+            "alert_candidates",
+            {
+                "minimum_risk_score": minimum_risk_score,
+                "limit": limit,
+            },
+        )
+        deliveries_by_account: dict[str, list[AlertDeliveryStatus]] = {}
+        for record in self._alert_state_store.delivery_records(refresh=True):
+            account_id = str(record.get("account_id", ""))
+            if not account_id:
+                continue
+            delivery = AlertDeliveryStatus.model_validate(record)
+            deliveries_by_account.setdefault(account_id, []).append(delivery)
+        for deliveries in deliveries_by_account.values():
+            deliveries.sort(key=lambda delivery: delivery.delivered_at, reverse=True)
+
+        candidates = [
+            AlertCandidateStatus.model_validate(
+                {
+                    **record,
+                    "deliveries": deliveries_by_account.get(
+                        str(record.get("account_id", "")),
+                        [],
+                    ),
+                }
+            )
+            for record in records
+        ]
+        return AlertStatusSnapshot(
+            generated_at=datetime.now(timezone.utc),
+            candidates=candidates,
+            filters=AlertStatusFilters(
+                minimum_risk_score=minimum_risk_score,
+                limit=limit,
+            ),
+        )
+
     def close(self) -> None:
         if self._driver is not None and self._owns_driver:
             self._driver.close()
@@ -277,6 +362,17 @@ class DashboardGraphRepository:
             raise ValueError("minimum_source_accounts must be between 2 and 1000.")
         if minimum_intermediaries < 1 or minimum_intermediaries > 100:
             raise ValueError("minimum_intermediaries must be between 1 and 100.")
+        if limit < 1 or limit > 100:
+            raise ValueError("limit must be between 1 and 100.")
+
+    @staticmethod
+    def _validate_alert_filters(
+        *,
+        minimum_risk_score: float,
+        limit: int,
+    ) -> None:
+        if minimum_risk_score < 0 or minimum_risk_score > 100:
+            raise ValueError("minimum_risk_score must be between 0 and 100.")
         if limit < 1 or limit > 100:
             raise ValueError("limit must be between 1 and 100.")
 
@@ -367,6 +463,22 @@ def create_app(
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Starburst-pattern detection is unavailable.",
+            ) from exc
+
+    @api.get("/api/alerts", response_model=AlertStatusSnapshot)
+    def alert_status(
+        minimum_risk_score: Annotated[float, Query(ge=0.0, le=100.0)] = 70.0,
+        limit: Annotated[int, Query(ge=1, le=100)] = 100,
+    ) -> AlertStatusSnapshot:
+        try:
+            return graph_repository.alert_status(
+                minimum_risk_score=minimum_risk_score,
+                limit=limit,
+            )
+        except Exception as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Alert status is unavailable.",
             ) from exc
 
     return api

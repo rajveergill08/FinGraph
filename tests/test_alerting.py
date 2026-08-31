@@ -162,6 +162,20 @@ class AlertingTests(unittest.TestCase):
             payload = json.loads(state_path.read_text(encoding="utf-8"))
             self.assertEqual(len(payload["deliveries"]), 2)
 
+            records = engine.state_store.delivery_records(refresh=True)
+            self.assertEqual(
+                [(record["account_id"], record["channel"]) for record in records],
+                [
+                    ("account-shell-001", "email"),
+                    ("account-shell-001", "slack"),
+                ],
+            )
+            records[0]["channel"] = "changed"
+            self.assertEqual(
+                engine.state_store.delivery_records()[0]["channel"],
+                "email",
+            )
+
     def test_failed_channel_is_reported_and_not_marked_delivered(self):
         repository = Mock(spec=HighRiskAccountRepository)
         repository.find_candidates.return_value = [_alert()]

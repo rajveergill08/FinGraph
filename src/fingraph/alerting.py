@@ -381,6 +381,22 @@ class JsonAlertStateStore:
         }
         self._save(deliveries)
 
+    def delivery_records(self, *, refresh: bool = False) -> tuple[dict[str, Any], ...]:
+        """Return defensive copies of the latest delivery record per channel."""
+        if refresh:
+            self._deliveries = None
+        deliveries = self._load()
+        return tuple(
+            dict(record)
+            for record in sorted(
+                deliveries.values(),
+                key=lambda record: (
+                    str(record.get("account_id", "")),
+                    str(record.get("channel", "")),
+                ),
+            )
+        )
+
     def _load(self) -> dict[str, dict[str, Any]]:
         if self._deliveries is not None:
             return self._deliveries

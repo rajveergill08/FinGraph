@@ -1,4 +1,5 @@
 import type {
+  AlertStatusSnapshot,
   GraphFilters,
   GraphSnapshot,
   StarburstSnapshot,
@@ -45,4 +46,17 @@ export async function fetchStarburstPatterns(
     throw new Error(`Starburst API returned ${response.status}.`);
   }
   return (await response.json()) as StarburstSnapshot;
+}
+
+export async function fetchAlertStatus(
+  signal?: AbortSignal,
+): Promise<AlertStatusSnapshot> {
+  const response = await fetch(`${apiBaseUrl}/api/alerts`, {
+    headers: { Accept: "application/json" },
+    signal,
+  });
+  if (!response.ok) {
+    throw new Error(`Alert API returned ${response.status}.`);
+  }
+  return (await response.json()) as AlertStatusSnapshot;
 }

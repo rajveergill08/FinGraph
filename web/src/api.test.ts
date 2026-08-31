@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchGraphSnapshot, fetchStarburstPatterns } from "./api";
+import {
+  fetchAlertStatus,
+  fetchGraphSnapshot,
+  fetchStarburstPatterns,
+} from "./api";
 import type {
+  AlertStatusSnapshot,
   GraphFilters,
   GraphSnapshot,
   StarburstSnapshot,
@@ -43,6 +48,34 @@ const starburstSnapshot: StarburstSnapshot = {
     minimum_source_accounts: 10,
     minimum_intermediaries: 2,
     limit: 20,
+  },
+};
+
+const alertStatusSnapshot: AlertStatusSnapshot = {
+  generated_at: "2026-08-31T12:00:00Z",
+  candidates: [
+    {
+      account_id: "account-shell-001",
+      graph_risk_score: 92.5,
+      risk_tier: "critical",
+      country: "KY",
+      pagerank_score: 0.91,
+      community_id: 7,
+      transaction_count: 55,
+      counterparty_count: 50,
+      latest_transfer_at: "2026-08-31T11:59:00Z",
+      deliveries: [
+        {
+          channel: "slack",
+          graph_risk_score: 91,
+          delivered_at: "2026-08-31T11:58:00Z",
+        },
+      ],
+    },
+  ],
+  filters: {
+    minimum_risk_score: 70,
+    limit: 100,
   },
 };
 
@@ -96,6 +129,30 @@ describe("fetchStarburstPatterns", () => {
 
     await expect(fetchStarburstPatterns()).rejects.toThrow(
       "Starburst API returned 503.",
+    );
+  });
+});
+
+describe("fetchAlertStatus", () => {
+  it("loads automated alert delivery status from the analyst API", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => alertStatusSnapshot,
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(fetchAlertStatus()).resolves.toEqual(alertStatusSnapshot);
+
+    const [url, options] = fetchMock.mock.calls[0];
+    expect(url).toBe("http://localhost:8000/api/alerts");
+    expect(options.headers).toEqual({ Accept: "application/json" });
+  });
+
+  it("reports a non-success alert response", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 503 }));
+
+    await expect(fetchAlertStatus()).rejects.toThrow(
+      "Alert API returned 503.",
     );
   });
 });
