@@ -203,7 +203,11 @@ main { width: min(1540px, calc(100% - clamp(28px, 7vw, 104px))); margin: 0 auto;
 .account-detail { padding: 25px 22px; }
 .detail-heading { display: flex; align-items: start; justify-content: space-between; gap: 16px; padding-bottom: 23px; border-bottom: 1px solid var(--line); }
 .detail-heading h3 { margin: 9px 0 0; max-width: 190px; overflow-wrap: anywhere; font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; font-size: 15px; }
-.detail-heading > strong { color: var(--danger); font-size: 36px; line-height: 1; letter-spacing: -0.06em; font-variant-numeric: tabular-nums; }
+.detail-heading-actions { min-width: 128px; display: grid; justify-items: end; gap: 7px; }
+.detail-heading-actions > strong { color: var(--danger); font-size: 36px; line-height: 1; letter-spacing: -0.06em; font-variant-numeric: tabular-nums; }
+.detail-heading-actions button { padding: 7px 9px; border: 1px solid #8b7138; border-radius: 3px; color: #ffe0a1; background: #322713; font-size: 8px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; }
+.detail-heading-actions button:hover { border-color: var(--warning); background: #433318; }
+.detail-heading-actions small { min-height: 11px; max-width: 150px; overflow-wrap: anywhere; color: var(--faint); font-size: 8px; line-height: 1.35; text-align: right; }
 .risk-label { font-size: 9px; font-weight: 850; letter-spacing: 0.12em; text-transform: uppercase; }
 .risk-critical { color: var(--danger); }
 .risk-watch { color: var(--warning); }

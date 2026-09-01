@@ -245,6 +245,14 @@ The automated-response panel refreshes on the same schedule, surfaces every
 high-risk rule candidate, distinguishes recorded Slack/email delivery from
 preview or unconfigured operation, and can focus visible candidate accounts.
 
+Select **Export evidence** in the investigation details to download a
+timestamped JSON dossier for the focused account. The export records the exact
+bounded graph filters, account risk and centrality, connected counterparties,
+flagged transfers, incoming and outgoing totals kept separate by currency,
+matched starburst patterns, and automated-alert delivery context. This makes
+the dashboard snapshot portable for a review while clearly identifying that it
+is not a complete bank ledger.
+
 Run the dashboard API and frontend together:
 
 ```powershell
@@ -312,7 +320,8 @@ dashboard API contract, alert-status shaping, and cooldown-aware Slack/email
 alert delivery. The
 `web` workspace separately verifies API filter routing, graph summaries,
 account matching, currency-safe transfer display, visibility-aware refresh
-scheduling, and community-collapse transformations with `npm test`, while
+scheduling, community-collapse transformations, and deterministic evidence
+exports with `npm test`, while
 `npm run build` performs the strict TypeScript production build.
 
 ## Planned milestones
@@ -324,5 +333,5 @@ scheduling, and community-collapse transformations with `npm test`, while
   visualization foundation implemented).
 - **Week 4:** continuously polling Slack/email alert rules with fresh risk
   scoring, cooldown suppression, failure retry, and persistent Docker state
-  plus dashboard delivery-status integration implemented; final
-  investigation workflow refinement remains.
+  plus dashboard delivery-status integration and portable investigation
+  evidence exports implemented; final review hardening remains.

@@ -20,6 +20,10 @@ import {
   highestRiskNode,
   riskBand,
 } from "./graph";
+import {
+  buildInvestigationExport,
+  downloadInvestigationExport,
+} from "./investigation";
 import NetworkGraph from "./NetworkGraph";
 import { AUTO_REFRESH_MS, startAutoRefresh } from "./refresh";
 import type {
@@ -306,6 +310,8 @@ function AccountDetails({
   selectedEdgeId,
   onSelectEdge,
   onClearEdge,
+  onExport,
+  exportMessage,
 }: {
   node: DashboardNode | null;
   nodes: DashboardNode[];
@@ -313,6 +319,8 @@ function AccountDetails({
   selectedEdgeId: string | null;
   onSelectEdge: (edgeId: string) => void;
   onClearEdge: () => void;
+  onExport: () => void;
+  exportMessage: string;
 }) {
   if (!node) {
     return (
@@ -338,7 +346,11 @@ function AccountDetails({
           <span className={`risk-label risk-${band}`}>{band} risk</span>
           <h3>{node.label}</h3>
         </div>
-        <strong>{node.graph_risk_score.toFixed(1)}</strong>
+        <div className="detail-heading-actions">
+          <strong>{node.graph_risk_score.toFixed(1)}</strong>
+          <button type="button" onClick={onExport}>Export evidence</button>
+          <small aria-live="polite">{exportMessage}</small>
+        </div>
       </div>
 
       <dl className="detail-grid">
@@ -409,6 +421,7 @@ export default function App() {
   const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(true);
   const [accountQuery, setAccountQuery] = useState("");
   const [searchMessage, setSearchMessage] = useState("");
+  const [exportMessage, setExportMessage] = useState("");
   const [status, setStatus] = useState<LoadStatus>("loading");
   const [error, setError] = useState("");
   const [refreshVersion, setRefreshVersion] = useState(0);
@@ -490,12 +503,14 @@ export default function App() {
   const selectNode = useCallback((nodeId: string) => {
     setSelectedNodeId(nodeId);
     setSelectedEdgeId(null);
+    setExportMessage("");
   }, []);
 
   const selectEdge = useCallback((edgeId: string) => {
     const edge = snapshot?.edges.find((candidate) => candidate.id === edgeId);
     if (!edge) return;
     setSelectedEdgeId(edgeId);
+    setExportMessage("");
     setSelectedNodeId((current) =>
       current === edge.source || current === edge.target ? current : edge.source,
     );
@@ -554,6 +569,22 @@ export default function App() {
     setAccountQuery(account.label);
     setSearchMessage(`Focused alert candidate ${account.label}`);
   }, [expandCommunity, selectNode, snapshot]);
+
+  const exportSelectedAccount = useCallback(() => {
+    if (!selectedNode || !snapshot) return;
+    try {
+      const file = buildInvestigationExport({
+        account: selectedNode,
+        graphSnapshot: snapshot,
+        alertSnapshot: alertStatusSnapshot,
+        starburstSnapshot,
+      });
+      downloadInvestigationExport(file);
+      setExportMessage(`Downloaded ${file.filename}`);
+    } catch {
+      setExportMessage("Evidence export failed");
+    }
+  }, [alertStatusSnapshot, selectedNode, snapshot, starburstSnapshot]);
 
   function applyFilters(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -700,6 +731,8 @@ export default function App() {
               selectedEdgeId={selectedEdgeId}
               onSelectEdge={selectEdge}
               onClearEdge={() => setSelectedEdgeId(null)}
+              onExport={exportSelectedAccount}
+              exportMessage={exportMessage}
             />
           </aside>
         </section>
