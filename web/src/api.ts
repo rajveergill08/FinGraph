@@ -1,5 +1,6 @@
 import type {
   AlertStatusSnapshot,
+  FreezeCase,
   GraphFilters,
   GraphSnapshot,
   StarburstSnapshot,
@@ -59,4 +60,27 @@ export async function fetchAlertStatus(
     throw new Error(`Alert API returned ${response.status}.`);
   }
   return (await response.json()) as AlertStatusSnapshot;
+}
+
+export async function freezeAccounts(
+  accountIds: string[],
+  reason: string,
+  patternId: string | null = null,
+): Promise<FreezeCase> {
+  const response = await fetch(`${apiBaseUrl}/api/actions/freeze`, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      account_ids: accountIds,
+      reason,
+      pattern_id: patternId,
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(`Containment API returned ${response.status}.`);
+  }
+  return (await response.json()) as FreezeCase;
 }

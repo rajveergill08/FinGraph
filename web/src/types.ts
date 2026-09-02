@@ -4,6 +4,9 @@ export interface DashboardNode {
   country: string | null;
   account_type: string | null;
   risk_tier: string | null;
+  account_status: string;
+  frozen_at: string | null;
+  freeze_case_id: string | null;
   graph_risk_score: number;
   pagerank_score: number;
   community_id: number | null;
@@ -88,6 +91,15 @@ export interface AlertStatusSnapshot {
   generated_at: string;
   candidates: AlertCandidateStatus[];
   filters: AlertStatusFilters;
+}
+
+export interface FreezeCase {
+  case_id: string;
+  status: "frozen";
+  reason: string;
+  pattern_id: string | null;
+  frozen_at: string;
+  account_ids: string[];
 }
 
 export interface GraphViewNode extends DashboardNode {

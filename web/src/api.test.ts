@@ -3,9 +3,11 @@ import {
   fetchAlertStatus,
   fetchGraphSnapshot,
   fetchStarburstPatterns,
+  freezeAccounts,
 } from "./api";
 import type {
   AlertStatusSnapshot,
+  FreezeCase,
   GraphFilters,
   GraphSnapshot,
   StarburstSnapshot,
@@ -77,6 +79,15 @@ const alertStatusSnapshot: AlertStatusSnapshot = {
     minimum_risk_score: 70,
     limit: 100,
   },
+};
+
+const freezeCase: FreezeCase = {
+  case_id: "containment-case-001",
+  status: "frozen",
+  reason: "Confirmed starburst network containment.",
+  pattern_id: "starburst:account-shell-001",
+  frozen_at: "2026-09-02T12:00:00Z",
+  account_ids: ["account-source-001", "account-shell-001"],
 };
 
 afterEach(() => {
@@ -154,5 +165,46 @@ describe("fetchAlertStatus", () => {
     await expect(fetchAlertStatus()).rejects.toThrow(
       "Alert API returned 503.",
     );
+  });
+});
+
+describe("freezeAccounts", () => {
+  it("posts a bounded containment request to the analyst API", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => freezeCase,
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      freezeAccounts(
+        ["account-source-001", "account-shell-001"],
+        "Confirmed starburst network containment.",
+        "starburst:account-shell-001",
+      ),
+    ).resolves.toEqual(freezeCase);
+
+    const [url, options] = fetchMock.mock.calls[0];
+    expect(url).toBe("http://localhost:8000/api/actions/freeze");
+    expect(options).toEqual({
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        account_ids: ["account-source-001", "account-shell-001"],
+        reason: "Confirmed starburst network containment.",
+        pattern_id: "starburst:account-shell-001",
+      }),
+    });
+  });
+
+  it("reports a failed containment response", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 503 }));
+
+    await expect(
+      freezeAccounts(["account-a"], "Confirmed analyst containment."),
+    ).rejects.toThrow("Containment API returned 503.");
   });
 });

@@ -22,6 +22,9 @@ function node(
     country: "US",
     account_type: "checking",
     risk_tier: "medium",
+    account_status: "active",
+    frozen_at: null,
+    freeze_case_id: null,
     graph_risk_score: risk,
     pagerank_score: pagerank,
     community_id: community,
@@ -121,6 +124,7 @@ describe("dashboard graph summaries", () => {
       kind: "community",
       member_count: 2,
       graph_risk_score: 72,
+      account_status: "active",
     });
     expect(view.edges).toHaveLength(1);
     expect(view.edges[0]).toMatchObject({
@@ -129,5 +133,23 @@ describe("dashboard graph summaries", () => {
       target: "account-c",
     });
     expect(view.hiddenInternalTransferCount).toBe(1);
+  });
+
+  it("summarizes containment status on collapsed communities", () => {
+    const containedSnapshot = {
+      ...snapshot,
+      nodes: snapshot.nodes.map((candidate) =>
+        candidate.community_id === 4
+          ? { ...candidate, account_status: "frozen" }
+          : candidate,
+      ),
+    };
+
+    const view = buildGraphView(containedSnapshot, new Set([4]));
+
+    expect(
+      view.nodes.find((candidate) => candidate.id === "community:4")
+        ?.account_status,
+    ).toBe("frozen");
   });
 });

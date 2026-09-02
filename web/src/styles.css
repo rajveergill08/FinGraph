@@ -99,8 +99,10 @@ main { width: min(1540px, calc(100% - clamp(28px, 7vw, 104px))); margin: 0 auto;
 .starburst-list article p { margin: 8px 0 5px; color: #d5aaa5; font-size: 11px; line-height: 1.45; }
 .starburst-list article p b { color: #fff0ed; font-size: 13px; }
 .starburst-list article small { color: #94726e; font-size: 9px; }
+.starburst-actions { flex: 0 0 auto; display: grid; gap: 6px; }
 .starburst-list article button { flex: 0 0 auto; padding: 8px 11px; border: 1px solid #8b4a40; border-radius: 3px; color: #ffd0cb; background: #3a1d1a; font-size: 9px; font-weight: 750; text-transform: uppercase; letter-spacing: 0.06em; }
 .starburst-list article button:hover:not(:disabled) { border-color: var(--danger); background: #4b211e; }
+.starburst-list article .freeze-network-button { border-color: var(--danger); color: #fff0ed; background: #551f1b; }
 
 .alert-status { margin-top: 16px; border: 1px solid var(--line); background: #0a1915; }
 .alert-status > header { min-height: 72px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 13px; padding: 14px 18px; }
@@ -140,6 +142,10 @@ main { width: min(1540px, calc(100% - clamp(28px, 7vw, 104px))); margin: 0 auto;
 
 .error-banner { margin-top: 16px; padding: 13px 16px; border-left: 3px solid var(--danger); color: #e9b5b1; background: #271715; font-size: 13px; }
 .error-banner strong { color: #ffd4d1; }
+.containment-banner { margin-top: 16px; padding: 13px 16px; border-left: 3px solid var(--warning); color: #dfcfaa; background: #211d13; font-size: 12px; }
+.containment-banner.success { border-left-color: var(--accent); color: #bfe6d8; background: #10231d; }
+.containment-banner.error { border-left-color: var(--danger); color: #e9b5b1; background: #271715; }
+.containment-banner strong { color: var(--ink); }
 
 .investigation-grid { margin-top: 16px; min-height: 650px; display: grid; grid-template-columns: minmax(0, 1fr) 380px; border: 1px solid var(--line); background: var(--surface); }
 .graph-panel { min-width: 0; border-right: 1px solid var(--line); }
@@ -207,6 +213,9 @@ main { width: min(1540px, calc(100% - clamp(28px, 7vw, 104px))); margin: 0 auto;
 .detail-heading-actions > strong { color: var(--danger); font-size: 36px; line-height: 1; letter-spacing: -0.06em; font-variant-numeric: tabular-nums; }
 .detail-heading-actions button { padding: 7px 9px; border: 1px solid #8b7138; border-radius: 3px; color: #ffe0a1; background: #322713; font-size: 8px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; }
 .detail-heading-actions button:hover { border-color: var(--warning); background: #433318; }
+.detail-heading-actions .freeze-account-button { border-color: #8b4a40; color: #ffd0cb; background: #3a1d1a; }
+.detail-heading-actions .freeze-account-button:hover:not(:disabled) { border-color: var(--danger); background: #4b211e; }
+.detail-heading-actions .freeze-account-button:disabled { cursor: not-allowed; }
 .detail-heading-actions small { min-height: 11px; max-width: 150px; overflow-wrap: anywhere; color: var(--faint); font-size: 8px; line-height: 1.35; text-align: right; }
 .risk-label { font-size: 9px; font-weight: 850; letter-spacing: 0.12em; text-transform: uppercase; }
 .risk-critical { color: var(--danger); }
@@ -218,6 +227,7 @@ main { width: min(1540px, calc(100% - clamp(28px, 7vw, 104px))); margin: 0 auto;
 .detail-grid > div:nth-child(even) { padding-left: 14px; }
 .detail-grid dt { color: var(--faint); font-size: 9px; font-weight: 750; letter-spacing: 0.09em; text-transform: uppercase; }
 .detail-grid dd { margin: 0; color: #d6e5e0; font-size: 13px; overflow-wrap: anywhere; }
+.detail-grid .frozen-value { color: var(--danger); font-weight: 800; text-transform: uppercase; }
 .transfer-prompt { margin: 20px 0 0; padding: 12px 13px; border-left: 2px solid #315148; color: var(--muted); background: #0d211b; font-size: 11px; line-height: 1.5; }
 .selected-transfer { margin-top: 20px; padding: 14px; border: 1px solid #3b5b52; background: #0d211b; }
 .selected-transfer > header { display: flex; align-items: center; justify-content: space-between; }

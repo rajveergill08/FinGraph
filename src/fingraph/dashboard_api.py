@@ -1,4 +1,4 @@
-"""Read-only API for FinGraph's analyst network dashboard."""
+"""API for FinGraph's analyst network dashboard and containment workflow."""
 
 from __future__ import annotations
 
@@ -7,12 +7,14 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 import os
 from pathlib import Path
-from typing import Annotated, Any, Sequence
+import re
+from typing import Annotated, Any, Literal, Sequence
 from urllib.parse import urlsplit
+from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .alerting import JsonAlertStateStore
 from .graph_analytics import AnalyticsSettings
@@ -23,11 +25,14 @@ _QUERY_FILES = {
     "graph": "dashboard_graph.cypher",
     "starbursts": "detect_starburst_patterns.cypher",
     "alert_candidates": "find_alert_candidates.cypher",
+    "freeze_accounts": "freeze_accounts.cypher",
 }
+
+_ACCOUNT_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 
 
 def load_query(name: str) -> str:
-    """Load one query from the dashboard's read-only Cypher catalog."""
+    """Load one query from the dashboard's bounded Cypher catalog."""
     try:
         filename = _QUERY_FILES[name]
     except KeyError as exc:
@@ -66,6 +71,9 @@ class DashboardNode(BaseModel):
     country: str | None = None
     account_type: str | None = None
     risk_tier: str | None = None
+    account_status: str = "active"
+    frozen_at: str | None = None
+    freeze_case_id: str | None = None
     graph_risk_score: float = Field(default=0.0, ge=0.0, le=100.0)
     pagerank_score: float = Field(default=0.0, ge=0.0)
     community_id: int | None = None
@@ -152,13 +160,55 @@ class AlertStatusSnapshot(BaseModel):
     filters: AlertStatusFilters
 
 
+class FreezeAccountsRequest(BaseModel):
+    account_ids: list[str] = Field(min_length=1, max_length=200)
+    reason: str = Field(max_length=500)
+    pattern_id: str | None = Field(default=None, max_length=160)
+
+    @field_validator("account_ids")
+    @classmethod
+    def validate_account_ids(cls, account_ids: list[str]) -> list[str]:
+        if len(account_ids) != len(set(account_ids)):
+            raise ValueError("account_ids must not contain duplicates.")
+        if any(not _ACCOUNT_ID_PATTERN.fullmatch(account_id) for account_id in account_ids):
+            raise ValueError("account_ids contains an invalid account identifier.")
+        return account_ids
+
+    @field_validator("reason")
+    @classmethod
+    def validate_reason(cls, reason: str) -> str:
+        cleaned = reason.strip()
+        if len(cleaned) < 10:
+            raise ValueError("reason must contain at least 10 characters.")
+        return cleaned
+
+    @field_validator("pattern_id")
+    @classmethod
+    def validate_pattern_id(cls, pattern_id: str | None) -> str | None:
+        if pattern_id is None:
+            return None
+        cleaned = pattern_id.strip()
+        if not cleaned:
+            raise ValueError("pattern_id cannot be blank.")
+        return cleaned
+
+
+class FreezeCase(BaseModel):
+    case_id: str
+    status: Literal["frozen"]
+    reason: str
+    pattern_id: str | None = None
+    frozen_at: datetime
+    account_ids: list[str]
+
+
 class HealthResponse(BaseModel):
     status: str
     neo4j: str
 
 
 class DashboardGraphRepository:
-    """Execute bounded read queries and shape them for network visualization."""
+    """Read graph snapshots and execute bounded analyst containment actions."""
 
     def __init__(
         self,
@@ -315,6 +365,23 @@ class DashboardGraphRepository:
             ),
         )
 
+    def freeze_accounts(self, request: FreezeAccountsRequest) -> FreezeCase:
+        case_id = f"containment-{uuid4().hex}"
+        frozen_at = datetime.now(timezone.utc)
+        records = self._execute_write(
+            "freeze_accounts",
+            {
+                "case_id": case_id,
+                "account_ids": request.account_ids,
+                "reason": request.reason,
+                "pattern_id": request.pattern_id,
+                "frozen_at": frozen_at.isoformat(),
+            },
+        )
+        if len(records) != 1:
+            raise LookupError("One or more requested accounts do not exist.")
+        return FreezeCase.model_validate(records[0])
+
     def close(self) -> None:
         if self._driver is not None and self._owns_driver:
             self._driver.close()
@@ -327,6 +394,21 @@ class DashboardGraphRepository:
             load_query(query_name),
             parameters_=parameters,
             routing_="r",
+            database_="neo4j",
+        )
+        return [record.data() for record in result.records]
+
+    def _execute_write(
+        self,
+        query_name: str,
+        parameters: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        if self._driver is None:
+            raise RuntimeError("Dashboard graph repository is not open.")
+        result = self._driver.execute_query(
+            load_query(query_name),
+            parameters_=parameters,
+            routing_="w",
             database_="neo4j",
         )
         return [record.data() for record in result.records]
@@ -398,14 +480,14 @@ def create_app(
     api = FastAPI(
         title="FinGraph Analyst API",
         version="0.1.0",
-        description="Read-only fraud-network snapshots for the analyst dashboard.",
+        description="Fraud-network investigation data and audited containment actions.",
         lifespan=lifespan,
     )
     api.add_middleware(
         CORSMiddleware,
         allow_origins=list(allowed_origins or allowed_origins_from_environment()),
         allow_credentials=False,
-        allow_methods=["GET"],
+        allow_methods=["GET", "POST"],
         allow_headers=["Accept", "Content-Type"],
     )
 
@@ -479,6 +561,25 @@ def create_app(
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Alert status is unavailable.",
+            ) from exc
+
+    @api.post(
+        "/api/actions/freeze",
+        response_model=FreezeCase,
+        status_code=status.HTTP_201_CREATED,
+    )
+    def freeze_accounts(request: FreezeAccountsRequest) -> FreezeCase:
+        try:
+            return graph_repository.freeze_accounts(request)
+        except LookupError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="One or more requested accounts do not exist.",
+            ) from exc
+        except Exception as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="The containment action is unavailable.",
             ) from exc
 
     return api

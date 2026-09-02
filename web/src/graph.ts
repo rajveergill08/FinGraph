@@ -157,22 +157,35 @@ export function buildGraphView(
 
   const communityNodes: GraphViewNode[] = [
     ...collapsibleCommunities.entries(),
-  ].map(([communityId, members]) => ({
-    id: `community:${communityId}`,
-    label: `Community ${communityId}`,
-    country: null,
-    account_type: "community",
-    risk_tier: "cluster",
-    graph_risk_score: Math.max(
-      ...members.map((member) => member.graph_risk_score),
-    ),
-    pagerank_score: Math.max(
-      ...members.map((member) => member.pagerank_score),
-    ),
-    community_id: communityId,
-    kind: "community",
-    member_count: members.length,
-  }));
+  ].map(([communityId, members]) => {
+    const frozenMemberCount = members.filter(
+      (member) => member.account_status === "frozen",
+    ).length;
+    return {
+      id: `community:${communityId}`,
+      label: `Community ${communityId}`,
+      country: null,
+      account_type: "community",
+      risk_tier: "cluster",
+      account_status:
+        frozenMemberCount === members.length
+          ? "frozen"
+          : frozenMemberCount > 0
+            ? "partially_frozen"
+            : "active",
+      frozen_at: null,
+      freeze_case_id: null,
+      graph_risk_score: Math.max(
+        ...members.map((member) => member.graph_risk_score),
+      ),
+      pagerank_score: Math.max(
+        ...members.map((member) => member.pagerank_score),
+      ),
+      community_id: communityId,
+      kind: "community" as const,
+      member_count: members.length,
+    };
+  });
 
   let hiddenInternalTransferCount = 0;
   const edges = snapshot.edges.flatMap((edge) => {

@@ -17,6 +17,8 @@ from fingraph.dashboard_api import (
     AlertStatusSnapshot,
     DashboardGraphRepository,
     DashboardNode,
+    FreezeAccountsRequest,
+    FreezeCase,
     GraphFilters,
     GraphSnapshot,
     StarburstFilters,
@@ -135,6 +137,17 @@ def _alert_status_snapshot() -> AlertStatusSnapshot:
     )
 
 
+def _freeze_case() -> FreezeCase:
+    return FreezeCase(
+        case_id="containment-case-001",
+        status="frozen",
+        reason="Confirmed high-risk network containment.",
+        pattern_id="starburst:account-shell-001",
+        frozen_at=datetime(2026, 9, 2, 12, 0, tzinfo=timezone.utc),
+        account_ids=["account-intermediary-001", "account-shell-001"],
+    )
+
+
 class DashboardApiTests(unittest.TestCase):
     def test_graph_query_is_bounded_parameterised_and_read_only(self):
         query = load_query("graph")
@@ -168,6 +181,17 @@ class DashboardApiTests(unittest.TestCase):
         self.assertNotIn("CREATE ", query.upper())
         self.assertNotIn(" SET ", query.upper())
         self.assertNotIn("DELETE ", query.upper())
+
+    def test_freeze_query_is_parameterised_and_creates_an_audit_case(self):
+        query = load_query("freeze_accounts")
+
+        self.assertIn("$account_ids", query)
+        self.assertIn("$case_id", query)
+        self.assertIn("$reason", query)
+        self.assertIn("CREATE (containment_case:ContainmentCase", query)
+        self.assertIn("account.account_status = 'frozen'", query)
+        self.assertIn("[:FROZEN_IN]", query)
+        self.assertNotIn("DETACH DELETE", query.upper())
 
     def test_repository_deduplicates_nodes_and_routes_query_as_read(self):
         driver = Mock()
@@ -280,12 +304,52 @@ class DashboardApiTests(unittest.TestCase):
             {"minimum_risk_score": 75.0, "limit": 25},
         )
 
+    def test_repository_freezes_validated_accounts_as_write_traffic(self):
+        driver = Mock()
+        driver.execute_query.return_value = _result(_freeze_case().model_dump())
+        repository = DashboardGraphRepository(driver=driver)
+        request = FreezeAccountsRequest(
+            account_ids=["account-intermediary-001", "account-shell-001"],
+            reason="  Confirmed high-risk network containment.  ",
+            pattern_id="starburst:account-shell-001",
+        )
+
+        result = repository.freeze_accounts(request)
+
+        self.assertEqual(result.status, "frozen")
+        self.assertEqual(result.account_ids, request.account_ids)
+        call = driver.execute_query.call_args
+        self.assertEqual(call.kwargs["routing_"], "w")
+        self.assertEqual(call.kwargs["database_"], "neo4j")
+        self.assertEqual(call.kwargs["parameters_"]["account_ids"], request.account_ids)
+        self.assertEqual(
+            call.kwargs["parameters_"]["reason"],
+            "Confirmed high-risk network containment.",
+        )
+        self.assertTrue(
+            call.kwargs["parameters_"]["case_id"].startswith("containment-")
+        )
+
+    def test_repository_rejects_a_partial_freeze(self):
+        driver = Mock()
+        driver.execute_query.return_value = _result()
+        repository = DashboardGraphRepository(driver=driver)
+
+        with self.assertRaisesRegex(LookupError, "do not exist"):
+            repository.freeze_accounts(
+                FreezeAccountsRequest(
+                    account_ids=["missing-account"],
+                    reason="Containment requested after analyst review.",
+                )
+            )
+
     def test_health_and_graph_endpoints_return_typed_payloads_with_cors(self):
         repository = Mock(spec=DashboardGraphRepository)
         repository.health.return_value = True
         repository.graph_snapshot.return_value = _snapshot()
         repository.starburst_patterns.return_value = _starburst_snapshot()
         repository.alert_status.return_value = _alert_status_snapshot()
+        repository.freeze_accounts.return_value = _freeze_case()
         api = create_app(
             repository,
             allowed_origins=("http://localhost:5173",),
@@ -298,6 +362,18 @@ class DashboardApiTests(unittest.TestCase):
             graph = client.get("/api/graph")
             starbursts = client.get("/api/patterns/starbursts")
             alerts = client.get("/api/alerts")
+            freeze = client.post(
+                "/api/actions/freeze",
+                headers={"Origin": "http://localhost:5173"},
+                json={
+                    "account_ids": [
+                        "account-intermediary-001",
+                        "account-shell-001",
+                    ],
+                    "reason": "Confirmed high-risk network containment.",
+                    "pattern_id": "starburst:account-shell-001",
+                },
+            )
 
         self.assertEqual(health.status_code, 200)
         self.assertEqual(health.json(), {"status": "ok", "neo4j": "connected"})
@@ -314,6 +390,12 @@ class DashboardApiTests(unittest.TestCase):
         self.assertEqual(alerts.status_code, 200)
         self.assertEqual(alerts.json()["candidates"][0]["account_id"], "account-shell-001")
         self.assertEqual(alerts.json()["candidates"][0]["deliveries"][0]["channel"], "slack")
+        self.assertEqual(freeze.status_code, 201)
+        self.assertEqual(freeze.json()["case_id"], "containment-case-001")
+        self.assertEqual(
+            freeze.headers["access-control-allow-origin"],
+            "http://localhost:5173",
+        )
         repository.graph_snapshot.assert_called_once_with(
             edge_limit=200,
             minimum_risk_score=0.0,
@@ -330,6 +412,7 @@ class DashboardApiTests(unittest.TestCase):
             minimum_risk_score=70.0,
             limit=100,
         )
+        repository.freeze_accounts.assert_called_once()
 
     def test_invalid_filters_are_rejected_before_query_execution(self):
         repository = Mock(spec=DashboardGraphRepository)
@@ -354,6 +437,38 @@ class DashboardApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 422)
         repository.alert_status.assert_not_called()
+
+        with TestClient(api) as client:
+            response = client.post(
+                "/api/actions/freeze",
+                json={
+                    "account_ids": ["account-a", "account-a"],
+                    "reason": "Confirmed duplicate account request.",
+                },
+            )
+
+        self.assertEqual(response.status_code, 422)
+        repository.freeze_accounts.assert_not_called()
+
+    def test_missing_freeze_account_is_reported_as_not_found(self):
+        repository = Mock(spec=DashboardGraphRepository)
+        repository.freeze_accounts.side_effect = LookupError("missing")
+        api = create_app(repository, allowed_origins=("http://localhost:5173",))
+
+        with TestClient(api) as client:
+            response = client.post(
+                "/api/actions/freeze",
+                json={
+                    "account_ids": ["missing-account"],
+                    "reason": "Containment requested after analyst review.",
+                },
+            )
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(
+            response.json()["detail"],
+            "One or more requested accounts do not exist.",
+        )
 
     def test_database_failure_is_reported_as_service_unavailable(self):
         repository = Mock(spec=DashboardGraphRepository)

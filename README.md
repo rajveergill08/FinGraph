@@ -190,7 +190,7 @@ projection is always dropped after the run.
 
 ## Run the Week 3 analyst dashboard API
 
-Start the read-only API and Neo4j through the dashboard Compose profile:
+Start the analyst API and Neo4j through the dashboard Compose profile:
 
 ```powershell
 docker compose --profile dashboard up --build -d dashboard-api
@@ -218,6 +218,14 @@ and combines them with the latest recorded delivery per notification channel.
 The endpoint defaults to a risk score of 70, accepts bounded
 `minimum_risk_score` and `limit` parameters, and exposes no webhook, SMTP, or
 Neo4j credentials.
+
+`POST /api/actions/freeze` accepts 1–200 validated account IDs and an analyst
+reason. It changes state only when every requested account exists, marks the
+accounts as frozen, and creates a timestamped `ContainmentCase` node connected
+to each account by `FROZEN_IN` relationships. Individual and whole-network
+actions therefore leave a graph-native audit trail instead of silently changing
+an account property. This project endpoint demonstrates containment inside the
+mock FinGraph environment; it is not connected to a real bank core system.
 
 ### Explore the React/D3 fraud network
 
@@ -252,6 +260,12 @@ flagged transfers, incoming and outgoing totals kept separate by currency,
 matched starburst patterns, and automated-alert delivery context. This makes
 the dashboard snapshot portable for a review while clearly identifying that it
 is not a complete bank ledger.
+
+Use **Freeze account** for the focused account. When starburst surveillance
+finds a funnel, **Freeze network** submits its distinct sources,
+intermediaries, and destination in one bounded action. The dashboard refreshes
+after success, displays the containment case ID, and disables repeated actions
+for accounts already marked as frozen.
 
 Run the dashboard API and frontend together:
 
@@ -317,7 +331,8 @@ The tests check simulator integrity, Kafka provisioning and payloads, stream
 validation, Neo4j upsert boundaries, circular-flow safeguards, risk-score
 parameters, weighted Louvain communities, weighted PageRank centrality, the
 dashboard API contract, alert-status shaping, and cooldown-aware Slack/email
-alert delivery. The
+alert delivery. Containment tests verify all-or-nothing account validation,
+write routing, audit-case creation, request bounds, and API failure handling. The
 `web` workspace separately verifies API filter routing, graph summaries,
 account matching, currency-safe transfer display, visibility-aware refresh
 scheduling, community-collapse transformations, and deterministic evidence
@@ -334,4 +349,6 @@ exports with `npm test`, while
 - **Week 4:** continuously polling Slack/email alert rules with fresh risk
   scoring, cooldown suppression, failure retry, and persistent Docker state
   plus dashboard delivery-status integration and portable investigation
-  evidence exports implemented; final review hardening remains.
+  evidence exports implemented. Audited one-click account and starburst-network
+  containment completes the investigation workflow; final review validation
+  remains.

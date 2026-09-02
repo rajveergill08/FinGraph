@@ -10,6 +10,7 @@ import {
   fetchAlertStatus,
   fetchGraphSnapshot,
   fetchStarburstPatterns,
+  freezeAccounts,
 } from "./api";
 import {
   buildGraphView,
@@ -45,6 +46,10 @@ const DEFAULT_FILTERS: GraphFilters = {
 };
 
 type LoadStatus = "loading" | "refreshing" | "ready" | "error";
+type ContainmentNotice = {
+  kind: "pending" | "success" | "error";
+  message: string;
+};
 
 function metricValue(value: number) {
   return value.toLocaleString();
@@ -82,6 +87,16 @@ function selectedTransferCounterparty(
     direction: outgoing ? "Outgoing" : "Incoming",
     account: nodes.find((candidate) => candidate.id === counterpartyId) ?? null,
   };
+}
+
+function starburstAccountIds(pattern: StarburstPattern): string[] {
+  return [
+    ...new Set([
+      ...pattern.source_account_ids,
+      ...pattern.intermediary_account_ids,
+      pattern.sink_account_id,
+    ]),
+  ];
 }
 
 function TransferDetail({ edge, onClose }: { edge: DashboardEdge; onClose: () => void }) {
@@ -163,11 +178,17 @@ function CommunityControls({
 function StarburstAlerts({
   snapshot,
   visibleAccountIds,
+  frozenAccountIds,
+  pendingAccountIds,
   onFocusSink,
+  onFreezePattern,
 }: {
   snapshot: StarburstSnapshot | null;
   visibleAccountIds: ReadonlySet<string>;
+  frozenAccountIds: ReadonlySet<string>;
+  pendingAccountIds: ReadonlySet<string>;
   onFocusSink: (pattern: StarburstPattern) => void;
+  onFreezePattern: (pattern: StarburstPattern) => void;
 }) {
   const patterns = snapshot?.patterns ?? [];
   return (
@@ -198,6 +219,13 @@ function StarburstAlerts({
         <div className="starburst-list">
           {patterns.map((pattern) => {
             const sinkVisible = visibleAccountIds.has(pattern.sink_account_id);
+            const accountIds = starburstAccountIds(pattern);
+            const allFrozen = accountIds.every((accountId) =>
+              frozenAccountIds.has(accountId),
+            );
+            const containmentPending = accountIds.some((accountId) =>
+              pendingAccountIds.has(accountId),
+            );
             return (
               <article key={pattern.id}>
                 <div>
@@ -210,14 +238,28 @@ function StarburstAlerts({
                     {pattern.inbound_transfer_count + pattern.outbound_transfer_count} linked transfers · latest {formatTransactionTime(pattern.latest_transfer_at)}
                   </small>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => onFocusSink(pattern)}
-                  disabled={!sinkVisible}
-                  title={sinkVisible ? "Inspect the destination account" : "Sink account is outside the current graph filters"}
-                >
-                  {sinkVisible ? "Focus sink" : "Outside view"}
-                </button>
+                <div className="starburst-actions">
+                  <button
+                    type="button"
+                    onClick={() => onFocusSink(pattern)}
+                    disabled={!sinkVisible}
+                    title={sinkVisible ? "Inspect the destination account" : "Sink account is outside the current graph filters"}
+                  >
+                    {sinkVisible ? "Focus sink" : "Outside view"}
+                  </button>
+                  <button
+                    className="freeze-network-button"
+                    type="button"
+                    onClick={() => onFreezePattern(pattern)}
+                    disabled={allFrozen || containmentPending}
+                  >
+                    {allFrozen
+                      ? "Network frozen"
+                      : containmentPending
+                        ? "Freezing…"
+                        : `Freeze ${accountIds.length} accounts`}
+                  </button>
+                </div>
               </article>
             );
           })}
@@ -311,7 +353,9 @@ function AccountDetails({
   onSelectEdge,
   onClearEdge,
   onExport,
+  onFreeze,
   exportMessage,
+  containmentPending,
 }: {
   node: DashboardNode | null;
   nodes: DashboardNode[];
@@ -320,7 +364,9 @@ function AccountDetails({
   onSelectEdge: (edgeId: string) => void;
   onClearEdge: () => void;
   onExport: () => void;
+  onFreeze: () => void;
   exportMessage: string;
+  containmentPending: boolean;
 }) {
   if (!node) {
     return (
@@ -333,6 +379,7 @@ function AccountDetails({
   }
 
   const band = riskBand(node.graph_risk_score);
+  const frozen = node.account_status === "frozen";
   const sortedEdges = [...edges].sort(
     (left, right) =>
       Date.parse(right.occurred_at ?? "") - Date.parse(left.occurred_at ?? ""),
@@ -348,7 +395,15 @@ function AccountDetails({
         </div>
         <div className="detail-heading-actions">
           <strong>{node.graph_risk_score.toFixed(1)}</strong>
-          <button type="button" onClick={onExport}>Export evidence</button>
+          <button className="export-evidence-button" type="button" onClick={onExport}>Export evidence</button>
+          <button
+            className="freeze-account-button"
+            type="button"
+            onClick={onFreeze}
+            disabled={frozen || containmentPending}
+          >
+            {frozen ? "Account frozen" : containmentPending ? "Freezing…" : "Freeze account"}
+          </button>
           <small aria-live="polite">{exportMessage}</small>
         </div>
       </div>
@@ -360,6 +415,8 @@ function AccountDetails({
         <div><dt>Risk tier</dt><dd>{node.risk_tier ?? "Unknown"}</dd></div>
         <div><dt>Account type</dt><dd>{node.account_type ?? "Unknown"}</dd></div>
         <div><dt>Country</dt><dd>{node.country ?? "Unknown"}</dd></div>
+        <div><dt>Account status</dt><dd className={frozen ? "frozen-value" : undefined}>{node.account_status}</dd></div>
+        <div><dt>Freeze case</dt><dd title={node.freeze_case_id ?? undefined}>{node.freeze_case_id ?? "None"}</dd></div>
       </dl>
 
       {selectedEdge ? (
@@ -422,6 +479,10 @@ export default function App() {
   const [accountQuery, setAccountQuery] = useState("");
   const [searchMessage, setSearchMessage] = useState("");
   const [exportMessage, setExportMessage] = useState("");
+  const [pendingAccountIds, setPendingAccountIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [containmentNotice, setContainmentNotice] = useState<ContainmentNotice | null>(null);
   const [status, setStatus] = useState<LoadStatus>("loading");
   const [error, setError] = useState("");
   const [refreshVersion, setRefreshVersion] = useState(0);
@@ -493,6 +554,14 @@ export default function App() {
   );
   const visibleAccountIds = useMemo(
     () => new Set(snapshot?.nodes.map((node) => node.id) ?? []),
+    [snapshot],
+  );
+  const frozenAccountIds = useMemo(
+    () => new Set(
+      snapshot?.nodes
+        .filter((node) => node.account_status === "frozen")
+        .map((node) => node.id) ?? [],
+    ),
     [snapshot],
   );
   const selectedNode = snapshot?.nodes.find((node) => node.id === selectedNodeId) ?? null;
@@ -569,6 +638,68 @@ export default function App() {
     setAccountQuery(account.label);
     setSearchMessage(`Focused alert candidate ${account.label}`);
   }, [expandCommunity, selectNode, snapshot]);
+
+  const requestContainment = useCallback(async (
+    accountIds: string[],
+    reason: string,
+    patternId: string | null = null,
+  ) => {
+    const uniqueAccountIds = [...new Set(accountIds)];
+    setPendingAccountIds(new Set(uniqueAccountIds));
+    setContainmentNotice({
+      kind: "pending",
+      message: `Freezing ${uniqueAccountIds.length} ${uniqueAccountIds.length === 1 ? "account" : "accounts"}…`,
+    });
+    try {
+      const containmentCase = await freezeAccounts(
+        uniqueAccountIds,
+        reason,
+        patternId,
+      );
+      setContainmentNotice({
+        kind: "success",
+        message: `${containmentCase.case_id} froze ${containmentCase.account_ids.length} ${containmentCase.account_ids.length === 1 ? "account" : "accounts"}.`,
+      });
+      const containedAccountIds = new Set(containmentCase.account_ids);
+      setSnapshot((current) => current ? {
+        ...current,
+        nodes: current.nodes.map((node) =>
+          containedAccountIds.has(node.id)
+            ? {
+                ...node,
+                account_status: "frozen",
+                frozen_at: containmentCase.frozen_at,
+                freeze_case_id: containmentCase.case_id,
+              }
+            : node,
+        ),
+      } : current);
+      setRefreshVersion((current) => current + 1);
+    } catch (reason: unknown) {
+      setContainmentNotice({
+        kind: "error",
+        message: reason instanceof Error ? reason.message : "Containment action failed.",
+      });
+    } finally {
+      setPendingAccountIds(new Set());
+    }
+  }, []);
+
+  const freezeStarburst = useCallback((pattern: StarburstPattern) => {
+    void requestContainment(
+      starburstAccountIds(pattern),
+      "Detected starburst network contained by a FinGraph analyst.",
+      pattern.id,
+    );
+  }, [requestContainment]);
+
+  const freezeSelectedAccount = useCallback(() => {
+    if (!selectedNode) return;
+    void requestContainment(
+      [selectedNode.id],
+      "High-risk account contained by a FinGraph analyst.",
+    );
+  }, [requestContainment, selectedNode]);
 
   const exportSelectedAccount = useCallback(() => {
     if (!selectedNode || !snapshot) return;
@@ -647,7 +778,10 @@ export default function App() {
         <StarburstAlerts
           snapshot={starburstSnapshot}
           visibleAccountIds={visibleAccountIds}
+          frozenAccountIds={frozenAccountIds}
+          pendingAccountIds={pendingAccountIds}
           onFocusSink={focusStarburstSink}
+          onFreezePattern={freezeStarburst}
         />
 
         <AlertStatusPanel
@@ -677,6 +811,12 @@ export default function App() {
 
         {status === "error" && (
           <div className="error-banner" role="alert"><strong>Live graph unavailable.</strong> {error} Check the dashboard API, then refresh this snapshot.</div>
+        )}
+
+        {containmentNotice && (
+          <div className={`containment-banner ${containmentNotice.kind}`} role={containmentNotice.kind === "error" ? "alert" : "status"}>
+            <strong>Containment:</strong> {containmentNotice.message}
+          </div>
         )}
 
         <section className="investigation-grid">
@@ -732,7 +872,9 @@ export default function App() {
               onSelectEdge={selectEdge}
               onClearEdge={() => setSelectedEdgeId(null)}
               onExport={exportSelectedAccount}
+              onFreeze={freezeSelectedAccount}
               exportMessage={exportMessage}
+              containmentPending={selectedNode ? pendingAccountIds.has(selectedNode.id) : false}
             />
           </aside>
         </section>

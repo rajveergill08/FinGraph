@@ -12,6 +12,9 @@ FOR (bank:Bank) REQUIRE bank.bank_id IS UNIQUE;
 CREATE CONSTRAINT transaction_id_unique IF NOT EXISTS
 FOR ()-[transfer:TRANSFERRED_TO]-() REQUIRE transfer.transaction_id IS UNIQUE;
 
+CREATE CONSTRAINT containment_case_id_unique IF NOT EXISTS
+FOR (containment_case:ContainmentCase) REQUIRE containment_case.case_id IS UNIQUE;
+
 CREATE INDEX account_country IF NOT EXISTS
 FOR (account:Account) ON (account.country);
 
