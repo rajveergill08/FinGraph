@@ -339,6 +339,25 @@ scheduling, community-collapse transformations, and deterministic evidence
 exports with `npm test`, while
 `npm run build` performs the strict TypeScript production build.
 
+### Final-review readiness audit
+
+With the local dashboard profile running, execute the repeatable final-review
+preflight:
+
+```powershell
+fingraph-review --query-target-ms 100 --query-runs 3
+```
+
+The command exits non-zero unless Neo4j contains accounts and transfers, all
+required constraints and indexes are installed, every account has rules-based
+risk, Louvain, and PageRank properties, and every warmed circular-flow and
+starburst query run completes in under 100 ms. It also verifies the analyst
+dashboard, Neo4j Browser, API documentation, and API health pages. The emitted
+JSON provides a timestamped, machine-readable pass/fail record for the final
+review. Use `--skip-pages` only for a database-only diagnostic; the separate
+`fingraph-audit --target-ms 1000` command remains the end-to-end Kafka-to-Neo4j
+latency proof because it intentionally publishes a uniquely identified event.
+
 ## Planned milestones
 
 - **Week 2:** Flink consumer, transaction cleaning, Neo4j real-time upserts,
@@ -350,5 +369,6 @@ exports with `npm test`, while
   scoring, cooldown suppression, failure retry, and persistent Docker state
   plus dashboard delivery-status integration and portable investigation
   evidence exports implemented. Audited one-click account and starburst-network
-  containment completes the investigation workflow; final review validation
-  remains.
+  containment completes the investigation workflow; a repeatable readiness
+  audit now covers graph data, schema, analytics, query latency, and review-page
+  availability.
