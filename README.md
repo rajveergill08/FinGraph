@@ -114,11 +114,34 @@ event and measure when its `TRANSFERRED_TO` edge becomes queryable in Neo4j:
 fingraph-audit --target-ms 1000
 ```
 
-The command opens and verifies both connections before starting the timer,
-waits for Kafka's acknowledgement, and polls Neo4j every 10 ms. It prints a
-JSON result and exits non-zero unless the edge is visible in under one second.
+The command opens and verifies both connections, validates the probe, and
+confirms that its transaction ID is not already present before starting the
+timer. It waits for Kafka's acknowledgement and polls Neo4j every 10 ms. A
+successful result proves exactly one connected edge with the expected source,
+destination, amount, and canonical currency, not just a matching transaction ID.
+It prints a JSON result and exits non-zero unless the edge is visible in under
+one second, including when an edge is eventually found but misses the target.
 The consumer uses a 50 ms Python bundle timeout by default so low-volume fraud
 events are not held by Flink's throughput-oriented 1000 ms default.
+
+For the final-review proof, collect a bounded series of independent probes:
+
+```powershell
+fingraph-audit --target-ms 1000 --runs 5
+```
+
+Every sample must pass. The timestamped JSON retains each unique transaction
+ID, connected-edge evidence or error, the pass count, and the maximum measured
+latency. Timed-out samples have no measured latency and still fail the overall
+report; they are never omitted or silently retried. `--runs` accepts 1-20 and
+defaults to one, preserving the original single-probe top-level result fields.
+
+Start the services and provision topics before the review. Docker's container
+`Up` status does not prove that the Flink Python worker has processed its first
+event. A startup batch may miss one second; retain that failure and distinguish
+it from a subsequent ready-pipeline batch. This audit does not certify cold-start
+latency or production throughput. See the [September 4 verification record](docs/verification/2026-09-04-pipeline-audit.md)
+for both startup and ready-pipeline results.
 
 ### Stream-contract validation
 

@@ -6,18 +6,24 @@ import argparse
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
+import math
 import os
 import time
 from typing import Any, Callable, Sequence
 from uuid import uuid4
 
 from .simulator import TransactionNetworkSimulator
+from .stream_contract import normalise_transaction_event
 
 
 _FIND_TRANSACTION = """
-MATCH ()-[transfer:TRANSFERRED_TO {transaction_id: $transaction_id}]->()
-RETURN transfer.transaction_id AS transaction_id
-LIMIT 1
+MATCH (source:Account)-[transfer:TRANSFERRED_TO {transaction_id: $transaction_id}]
+      ->(destination:Account)
+RETURN transfer.transaction_id AS transaction_id,
+       source.account_id AS source_account_id,
+       destination.account_id AS destination_account_id,
+       transfer.amount AS amount, transfer.currency AS currency
+LIMIT 2
 """
 
 
@@ -52,10 +58,20 @@ class AuditResult:
     transaction_id: str
     latency_ms: float
     target_ms: float
+    edge: dict[str, object]
 
     @property
     def passed(self) -> bool:
         return self.latency_ms < self.target_ms
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "transaction_id": self.transaction_id,
+            "latency_ms": self.latency_ms,
+            "target_ms": self.target_ms,
+            "passed": self.passed,
+            "edge": self.edge,
+        }
 
 
 def build_audit_event(
@@ -131,20 +147,21 @@ class PipelineAuditor:
         poll_interval_seconds: float = 0.01,
         event: dict[str, object] | None = None,
     ) -> AuditResult:
-        if timeout_seconds <= 0:
-            raise ValueError("timeout_seconds must be positive.")
-        if poll_interval_seconds <= 0:
-            raise ValueError("poll_interval_seconds must be positive.")
+        if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be finite and positive.")
+        if not math.isfinite(poll_interval_seconds) or poll_interval_seconds <= 0:
+            raise ValueError("poll_interval_seconds must be finite and positive.")
         if self._producer is None or self._driver is None:
             raise RuntimeError("Pipeline auditor is not open.")
 
-        audit_event = event or build_audit_event()
-        transaction = audit_event.get("transaction")
-        if not isinstance(transaction, dict) or not isinstance(
-            transaction.get("transaction_id"), str
-        ):
-            raise ValueError("Audit event must contain a transaction_id.")
+        audit_event = event if event is not None else build_audit_event()
+        canonical = normalise_transaction_event(audit_event)
+        transaction = canonical["transaction"]
+        assert isinstance(transaction, dict)
         transaction_id = transaction["transaction_id"]
+        # An existing edge must never masquerade as a newly ingested probe.
+        if self._find_transaction(transaction_id).records:
+            raise ValueError(f"Audit transaction {transaction_id} already exists.")
         payload = json.dumps(audit_event, separators=(",", ":"), sort_keys=True).encode(
             "utf-8"
         )
@@ -158,17 +175,27 @@ class PipelineAuditor:
         acknowledgement.get(timeout=min(10.0, timeout_seconds))
 
         while True:
-            result = self._driver.execute_query(
-                _FIND_TRANSACTION,
-                parameters_={"transaction_id": transaction_id},
-                database_=self.settings.neo4j_database,
-            )
+            result = self._find_transaction(transaction_id)
             elapsed = self._clock() - started_at
             if result.records:
+                edge = result.records[0].data()
+                expected = {
+                    field: transaction[field]
+                    for field in (
+                        "transaction_id", "source_account_id",
+                        "destination_account_id", "currency",
+                    )
+                }
+                expected["amount"] = float(transaction["amount"])
+                if len(result.records) != 1 or edge != expected:
+                    raise RuntimeError(
+                        f"Audit transaction {transaction_id} has unexpected graph data."
+                    )
                 return AuditResult(
                     transaction_id=transaction_id,
                     latency_ms=round(elapsed * 1000, 3),
                     target_ms=timeout_seconds * 1000,
+                    edge=edge,
                 )
             if elapsed >= timeout_seconds:
                 raise TimeoutError(
@@ -176,6 +203,13 @@ class PipelineAuditor:
                     f"{timeout_seconds:.3f}s."
                 )
             self._sleep(min(poll_interval_seconds, timeout_seconds - elapsed))
+
+    def _find_transaction(self, transaction_id: str) -> Any:
+        return self._driver.execute_query(
+            _FIND_TRANSACTION,
+            parameters_={"transaction_id": transaction_id},
+            database_=self.settings.neo4j_database,
+        )
 
     def close(self) -> None:
         if self._producer is not None and self._owns_producer:
@@ -192,37 +226,65 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--target-ms", type=float, default=1000.0)
     parser.add_argument("--poll-ms", type=float, default=10.0)
+    parser.add_argument(
+        "--runs", type=int, default=1,
+        help="Number of sequential unique probes (1-20); every sample must pass.",
+    )
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    if args.target_ms <= 0 or args.poll_ms <= 0:
-        raise SystemExit("--target-ms and --poll-ms must be positive.")
+    if any(not math.isfinite(value) or value <= 0 for value in (args.target_ms, args.poll_ms)):
+        raise SystemExit("--target-ms and --poll-ms must be finite and positive.")
+    if not 1 <= args.runs <= 20:
+        raise SystemExit("--runs must be between 1 and 20.")
     auditor = PipelineAuditor()
+    generated_at = datetime.now(timezone.utc).isoformat()
+    samples: list[dict[str, Any]] = []
     try:
         auditor.open()
-        result = auditor.run(
-            timeout_seconds=args.target_ms / 1000,
-            poll_interval_seconds=args.poll_ms / 1000,
-        )
-    except TimeoutError as exc:
-        print(json.dumps({"passed": False, "error": str(exc)}, sort_keys=True))
+        for _ in range(args.runs):
+            event = build_audit_event()
+            try:
+                result = auditor.run(
+                    timeout_seconds=args.target_ms / 1000,
+                    poll_interval_seconds=args.poll_ms / 1000,
+                    event=event,
+                )
+                samples.append(result.as_dict())
+            except Exception as exc:
+                samples.append({
+                    "transaction_id": event["transaction"]["transaction_id"],
+                    "target_ms": args.target_ms,
+                    "passed": False,
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                })
+    except Exception as exc:
+        print(json.dumps({
+            "generated_at": generated_at, "passed": False, "stage": "setup",
+            "error_type": type(exc).__name__, "error": str(exc),
+        }, sort_keys=True))
         return 1
     finally:
         auditor.close()
-    print(
-        json.dumps(
-            {
-                "latency_ms": result.latency_ms,
-                "passed": result.passed,
-                "target_ms": result.target_ms,
-                "transaction_id": result.transaction_id,
-            },
-            sort_keys=True,
-        )
-    )
-    return 0
+    passed = all(sample["passed"] for sample in samples)
+    measured = [sample["latency_ms"] for sample in samples if "latency_ms" in sample]
+    report = {
+        "generated_at": generated_at,
+        "passed": passed,
+        "target_ms": args.target_ms,
+        "sample_count": len(samples),
+        "passed_count": sum(bool(sample["passed"]) for sample in samples),
+        "maximum_latency_ms": max(measured) if measured else None,
+        "samples": samples,
+    }
+    # Preserve the original top-level single-probe fields for existing callers.
+    if args.runs == 1:
+        report.update(samples[0])
+    print(json.dumps(report, sort_keys=True))
+    return 0 if passed else 1
 
 
 if __name__ == "__main__":
