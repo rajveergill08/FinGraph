@@ -23,6 +23,7 @@ class StreamSettings:
     parallelism: int = 1
     python_bundle_size: int = 50
     python_bundle_time_ms: int = 50
+    checkpoint_interval_ms: int = 10_000
     neo4j_uri: str = "bolt://localhost:7687"
     neo4j_username: str = "neo4j"
     neo4j_password: str = "change-me-now"
@@ -49,6 +50,9 @@ class StreamSettings:
             ),
             python_bundle_time_ms=_positive_environment_integer(
                 "FLINK_PYTHON_BUNDLE_TIME_MS", defaults.python_bundle_time_ms
+            ),
+            checkpoint_interval_ms=_positive_environment_integer(
+                "FLINK_CHECKPOINT_INTERVAL_MS", defaults.checkpoint_interval_ms
             ),
             neo4j_uri=os.getenv("NEO4J_URI", defaults.neo4j_uri),
             neo4j_username=os.getenv("NEO4J_USERNAME", defaults.neo4j_username),
@@ -89,6 +93,15 @@ def dead_letter_record(raw_event: str | bytes, error: Exception) -> str:
         separators=(",", ":"),
         sort_keys=True,
     )
+
+
+def validate_and_route(raw_event: str | bytes) -> tuple[str | None, str | None]:
+    """Return one canonical event or one dead-letter record, never both."""
+    try:
+        event = decode_and_normalise(raw_event)
+    except EventValidationError as exc:
+        return None, dead_letter_record(raw_event, exc)
+    return json.dumps(event, separators=(",", ":")), None
 
 
 class Neo4jTransactionWriter:
@@ -174,14 +187,16 @@ def build_job(settings: StreamSettings | None = None) -> Any:
     env = StreamExecutionEnvironment.get_execution_environment(flink_configuration)
     env.set_python_executable(sys.executable)
     env.set_parallelism(config.parallelism)
+    env.enable_checkpointing(config.checkpoint_interval_ms)
     env.add_jars(_connector_jar_uri(config.kafka_connector_jar))
 
     class ValidateTransactions(ProcessFunction):
         def process_element(self, value: str, ctx: Any):
-            try:
-                yield json.dumps(decode_and_normalise(value), separators=(",", ":"))
-            except EventValidationError as exc:
-                ctx.output(dlq_tag, dead_letter_record(value, exc))
+            valid_event, invalid_event = validate_and_route(value)
+            if invalid_event is not None:
+                yield dlq_tag, invalid_event
+            else:
+                yield valid_event
 
     class Neo4jUpsert(MapFunction):
         def open(self, runtime_context: Any) -> None:

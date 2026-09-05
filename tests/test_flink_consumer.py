@@ -10,6 +10,7 @@ from fingraph.flink_consumer import (
     _connector_jar_uri,
     dead_letter_record,
     decode_and_normalise,
+    validate_and_route,
 )
 from fingraph.stream_contract import EventValidationError
 
@@ -50,6 +51,20 @@ class FlinkConsumerTests(unittest.TestCase):
         self.assertEqual(result["error"], "broken")
         self.assertIn("bad", result["raw_event"])
 
+    def test_valid_event_routes_only_to_the_canonical_stream(self):
+        valid, invalid = validate_and_route(json.dumps(valid_event()))
+
+        self.assertIsNone(invalid)
+        self.assertEqual(json.loads(valid)["transaction"]["currency"], "USD")
+
+    def test_invalid_event_routes_only_to_the_dead_letter_stream(self):
+        valid, invalid = validate_and_route('{"probe":"final-review-dlq"}')
+
+        self.assertIsNone(valid)
+        payload = json.loads(invalid)
+        self.assertEqual(payload["error_type"], "EventValidationError")
+        self.assertIn("final-review-dlq", payload["raw_event"])
+
     def test_settings_read_environment(self):
         with unittest.mock.patch.dict("os.environ", {"KAFKA_CONSUMER_GROUP": "test-group"}):
             settings = StreamSettings.from_environment()
@@ -59,6 +74,19 @@ class FlinkConsumerTests(unittest.TestCase):
             self.assertEqual(settings.parallelism, 1)
             self.assertEqual(settings.python_bundle_size, 50)
             self.assertEqual(settings.python_bundle_time_ms, 50)
+            self.assertEqual(settings.checkpoint_interval_ms, 10_000)
+
+    def test_checkpoint_interval_reads_positive_environment_value(self):
+        with unittest.mock.patch.dict(
+            "os.environ", {"FLINK_CHECKPOINT_INTERVAL_MS": "2500"}
+        ):
+            self.assertEqual(StreamSettings.from_environment().checkpoint_interval_ms, 2500)
+
+        with unittest.mock.patch.dict(
+            "os.environ", {"FLINK_CHECKPOINT_INTERVAL_MS": "0"}
+        ):
+            with self.assertRaisesRegex(ValueError, "positive integer"):
+                StreamSettings.from_environment()
 
     def test_connector_jar_must_be_configured_and_exist(self):
         with self.assertRaisesRegex(RuntimeError, "FLINK_KAFKA_CONNECTOR_JAR"):

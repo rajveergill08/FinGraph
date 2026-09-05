@@ -60,12 +60,61 @@ class TransactionNetworkSimulatorTests(unittest.TestCase):
         self.assertIn("person_id", event["source_account"])
         self.assertIn("bank_id", event["destination_account"])
 
+    def test_fixture_contains_a_time_ordered_three_account_cycle(self) -> None:
+        cycle = [
+            transaction
+            for transaction in self.fixture.transactions
+            if transaction.transaction_id.startswith("circular-")
+        ]
+
+        self.assertEqual(3, len(cycle))
+        self.assertEqual(
+            [
+                ("account-normal-001", "account-normal-002"),
+                ("account-normal-002", "account-normal-003"),
+                ("account-normal-003", "account-normal-001"),
+            ],
+            [
+                (transaction.source_account_id, transaction.destination_account_id)
+                for transaction in cycle
+            ],
+        )
+        self.assertEqual(
+            sorted(transaction.occurred_at for transaction in cycle),
+            [transaction.occurred_at for transaction in cycle],
+        )
+        self.assertEqual(
+            ("account-normal-001", "account-normal-002", "account-normal-003"),
+            self.fixture.circular_flow_account_ids,
+        )
+
     def test_rejects_an_invalid_syndicate_shape(self) -> None:
         simulator = TransactionNetworkSimulator(
             start_at=datetime(2026, 8, 10, 9, 0, tzinfo=timezone.utc)
         )
         with self.assertRaises(ValueError):
             simulator.generate(syndicate_source_count=1)
+
+    def test_transaction_ids_are_replayable_per_seed_and_distinct_across_seeds(self) -> None:
+        arguments = {
+            "normal_transaction_count": 2,
+            "syndicate_source_count": 2,
+            "intermediary_count": 1,
+        }
+        first = TransactionNetworkSimulator(seed=1).generate(**arguments)
+        replay = TransactionNetworkSimulator(seed=1).generate(**arguments)
+        other = TransactionNetworkSimulator(seed=2).generate(**arguments)
+        first_ids = {transaction.transaction_id for transaction in first.transactions}
+
+        self.assertEqual(
+            first_ids,
+            {transaction.transaction_id for transaction in replay.transactions},
+        )
+        self.assertTrue(
+            first_ids.isdisjoint(
+                transaction.transaction_id for transaction in other.transactions
+            )
+        )
 
 
 if __name__ == "__main__":

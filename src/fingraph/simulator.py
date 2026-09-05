@@ -39,6 +39,7 @@ class TransactionFixture:
     accounts: dict[str, Account]
     transactions: tuple[Transaction, ...]
     syndicate: SyndicateSummary
+    circular_flow_account_ids: tuple[str, str, str]
 
     def events(self) -> Iterable[dict[str, object]]:
         for transaction in self.transactions:
@@ -68,6 +69,7 @@ class TransactionFixture:
             "syndicate_source_accounts": len(self.syndicate.source_account_ids),
             "syndicate_intermediaries": len(self.syndicate.intermediary_account_ids),
             "shell_account_id": self.syndicate.shell_account_id,
+            "circular_flow_accounts": len(self.circular_flow_account_ids),
         }
 
 
@@ -80,6 +82,7 @@ class TransactionNetworkSimulator:
     """
 
     def __init__(self, *, seed: int = 42, start_at: datetime | None = None) -> None:
+        self._seed = seed
         self._random = random.Random(seed)
         self._start_at = start_at or datetime.now(timezone.utc).replace(microsecond=0)
         if self._start_at.tzinfo is None:
@@ -109,7 +112,7 @@ class TransactionNetworkSimulator:
             source, destination = self._pick_distinct(normal_account_ids)
             transactions.append(
                 Transaction(
-                    transaction_id=f"normal-{index + 1:05d}",
+                    transaction_id=self._transaction_id("normal", index),
                     source_account_id=source,
                     destination_account_id=destination,
                     amount_cents=self._random.randint(2_500, 350_000),
@@ -129,6 +132,13 @@ class TransactionNetworkSimulator:
             transaction_offset=len(transactions),
         )
         transactions.extend(syndicate_transactions)
+        circular_flow_account_ids = normal_account_ids[:3]
+        transactions.extend(
+            self._create_circular_flow(
+                circular_flow_account_ids,
+                transaction_offset=len(transactions),
+            )
+        )
 
         return TransactionFixture(
             banks=banks,
@@ -136,7 +146,32 @@ class TransactionNetworkSimulator:
             accounts=accounts,
             transactions=tuple(transactions),
             syndicate=syndicate,
+            circular_flow_account_ids=circular_flow_account_ids,
         )
+
+    def _create_circular_flow(
+        self,
+        account_ids: tuple[str, str, str],
+        *,
+        transaction_offset: int,
+    ) -> list[Transaction]:
+        """Create one time-ordered A -> B -> C -> A review pattern."""
+        legs = zip(account_ids, (*account_ids[1:], account_ids[0]))
+        return [
+            Transaction(
+                transaction_id=self._transaction_id("circular", index),
+                source_account_id=source,
+                destination_account_id=destination,
+                amount_cents=750_000 - (index * 30_000),
+                currency="USD",
+                occurred_at=self._timestamp(transaction_offset + index),
+                origin_ip=f"203.0.113.{241 + index}",
+                channel="api",
+                syndicate_id="syndicate-circular-001",
+                risk_indicators=("circular_flow", "rapid_movement"),
+            )
+            for index, (source, destination) in enumerate(legs)
+        ]
 
     def _create_banks(self) -> dict[str, Bank]:
         bank_list = (
@@ -253,7 +288,7 @@ class TransactionNetworkSimulator:
         for index, source_account_id in enumerate(source_account_ids):
             transfers.append(
                 Transaction(
-                    transaction_id=f"starburst-in-{index + 1:05d}",
+                    transaction_id=self._transaction_id("starburst-in", index),
                     source_account_id=source_account_id,
                     destination_account_id=intermediary_account_ids[index % intermediary_count],
                     amount_cents=amount_cents,
@@ -270,7 +305,7 @@ class TransactionNetworkSimulator:
             source_count_for_intermediary = len(source_account_ids[index::intermediary_count])
             transfers.append(
                 Transaction(
-                    transaction_id=f"starburst-out-{index + 1:05d}",
+                    transaction_id=self._transaction_id("starburst-out", index),
                     source_account_id=intermediary_account_id,
                     destination_account_id=shell_account.account_id,
                     amount_cents=amount_cents * source_count_for_intermediary,
@@ -295,6 +330,9 @@ class TransactionNetworkSimulator:
 
     def _person_name(self, offset: int) -> str:
         return f"{FIRST_NAMES[offset % len(FIRST_NAMES)]} {LAST_NAMES[(offset * 3) % len(LAST_NAMES)]}"
+
+    def _transaction_id(self, pattern: str, index: int) -> str:
+        return f"{pattern}-s{self._seed}-{index + 1:05d}"
 
     def _pick_distinct(self, account_ids: tuple[str, ...]) -> tuple[str, str]:
         source = self._random.choice(account_ids)

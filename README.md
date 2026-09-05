@@ -11,7 +11,8 @@ The initial delivery contains:
 
 - a deterministic Python simulator that creates ordinary transactions and a
   nested `starburst` syndicate: many unrelated accounts send sub-threshold
-  transfers through intermediaries to an offshore shell account;
+  transfers through intermediaries to an offshore shell account, plus a
+  time-ordered three-account circular flow for positive query verification;
 - a Kafka publisher for the versioned `fingraph.transactions.v1` topic;
 - a Docker Compose development stack for Kafka and Neo4j; and
 - Neo4j constraints, indexes, and an idempotent transaction-upsert query.
@@ -68,6 +69,8 @@ fingraph-sim publish --seed 42 --normal-transactions 20 --syndicate-sources 50 -
 The publisher provisions the topic idempotently before sending events. Every
 event has a stable transaction ID, source and destination account metadata,
 ISO-8601 timestamp, origin IP, and syndicate risk indicators.
+Transaction IDs include the simulator seed, so replaying the same seed is
+idempotent while different deterministic fixtures cannot collide.
 `neo4j/upsert_transaction.cypher` specifies the idempotent graph write that
 the Week 2 Flink consumer will call.
 
@@ -98,8 +101,9 @@ powershell -NoProfile -ExecutionPolicy Bypass `
 fingraph-stream
 ```
 
-The PyFlink job resumes from committed offsets for consumer group
-`fingraph-neo4j-v1`. Valid events are canonicalised and written with the
+The PyFlink job checkpoints every 10 seconds by default and resumes from the
+resulting committed offsets for consumer group `fingraph-neo4j-v1`. Configure
+the interval with `FLINK_CHECKPOINT_INTERVAL_MS`. Valid events are canonicalised and written with the
 idempotent `neo4j/upsert_transaction.cypher` query. Invalid JSON or contract
 violations are published to `fingraph.transactions.dlq.v1` with the original
 value and validation error. Configure topic names, the consumer group, and
@@ -381,7 +385,7 @@ review. Use `--skip-pages` only for a database-only diagnostic; the separate
 `fingraph-audit --target-ms 1000` command remains the end-to-end Kafka-to-Neo4j
 latency proof because it intentionally publishes a uniquely identified event.
 
-## Planned milestones
+## Implementation status
 
 - **Week 2:** Flink consumer, transaction cleaning, Neo4j real-time upserts,
   and multi-hop Cypher risk queries.
@@ -395,3 +399,12 @@ latency proof because it intentionally publishes a uniquely identified event.
   containment completes the investigation workflow; a repeatable readiness
   audit now covers graph data, schema, analytics, query latency, and review-page
   availability.
+
+All four implementation phases are complete. The final live acceptance run
+verified valid and dead-letter streaming, committed-offset recovery, positive
+circular and starburst detection, GDS scoring, alert-rule evaluation, review
+pages, automated tests, and the production web build. See the
+[September 5 final acceptance record](docs/verification/2026-09-05-final-acceptance.md).
+The local PyFlink worker has material cold-start time, so start the stack before
+the presentation and run a readiness probe before measuring the under-one-second
+ready-pipeline target.
